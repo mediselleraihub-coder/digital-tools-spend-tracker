@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "digital-tools-spend-tracker"
+version = "0.1.0"
+description = "Internal Mediseller MVP for tracking digital tools spend, renewals, usage costs, and spikes."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "google-cloud-bigquery==3.35.1",
+  "httpx==0.28.1",
+  "ipykernel==6.29.5",
+  "jupyterlab==4.4.4",
+  "pandas==2.3.0",
+  "plotly==5.24.1",
+  "psycopg[binary]==3.2.9",
+  "pydantic==2.11.7",
+  "pydantic-settings==2.10.1",
+  "python-dotenv==1.1.1",
+  "PyYAML==6.0.2",
+  "rich==14.0.0",
+  "streamlit==1.46.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.1",
+  "ruff==0.12.2",
+]
+
+[project.scripts]
+spend-tracker = "spend_tracker.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spend_tracker"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

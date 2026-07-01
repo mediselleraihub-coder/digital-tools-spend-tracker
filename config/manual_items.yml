@@ -1,0 +1,193 @@
+manual_subscriptions:
+  - provider: openai
+    category: AI Subscription
+    product: ChatGPT Plus
+    plan: ChatGPT Plus
+    billing_cycle: monthly
+    amount: 1694.07
+    currency_code: INR
+    renewal_date: 2026-07-27
+    source: env_or_manual
+    status: active
+
+  - provider: anthropic
+    category: AI Subscription
+    product: Claude Pro
+    plan: Claude Pro
+    billing_cycle: monthly
+    amount: 23.60
+    currency_code: USD
+    renewal_date: 2026-07-10
+    source: env_or_manual
+    status: active
+
+  - provider: n8n_cloud
+    category: Automation
+    product: n8n Cloud
+    plan: Cloud workspace
+    billing_cycle: monthly
+    amount: 28.32
+    currency_code: EUR
+    renewal_date:
+    source: invoice_screenshot
+    status: active
+
+  - provider: godaddy_titan_email
+    category: Email
+    product: Professional Email Pro Light
+    plan: 3 mailboxes
+    billing_cycle: annual
+    amount: 948.00
+    currency_code: INR
+    renewal_date: 2027-06-16
+    source: godaddy_renewals_dashboard
+    status: active
+
+manual_assets:
+  - provider: godaddy_titan_email
+    category: Email
+    product: Professional Email Pro Light
+    asset_type: email_mailbox
+    asset_name: support@mediseller.com
+    asset_identifier: support@mediseller.com
+    renewal_date: 2027-06-16
+    annual_amount: 316.00
+    currency_code: INR
+    auto_renew: true
+    status: active
+
+  - provider: godaddy_titan_email
+    category: Email
+    product: Professional Email Pro Light
+    asset_type: email_mailbox
+    asset_name: sales@mediseller.com
+    asset_identifier: sales@mediseller.com
+    renewal_date: 2027-06-16
+    annual_amount: 316.00
+    currency_code: INR
+    auto_renew: true
+    status: active
+
+  - provider: godaddy_titan_email
+    category: Email
+    product: Professional Email Pro Light
+    asset_type: email_mailbox
+    asset_name: sandy@mediseller.com
+    asset_identifier: sandy@mediseller.com
+    renewal_date: 2027-06-16
+    annual_amount: 316.00
+    currency_code: INR
+    auto_renew: true
+    status: active
+
+  - provider: bigrock
+    category: Domains
+    product: Domain Registration
+    asset_type: domain
+    asset_name: medisellers.com
+    asset_identifier: medisellers.com
+    renewal_date: 2027-05-01
+    annual_amount:
+    currency_code: INR
+    auto_renew: false
+    status: active
+
+  - provider: bigrock
+    category: Domains
+    product: Domain Registration
+    asset_type: domain
+    asset_name: mediseller.com
+    asset_identifier: mediseller.com
+    renewal_date: 2027-07-30
+    annual_amount:
+    currency_code: INR
+    auto_renew: false
+    status: active
+
+  - provider: bigrock
+    category: Email
+    product: Titan Email India
+    asset_type: email_service
+    asset_name: mediseller.com Titan Email India
+    asset_identifier: mediseller.com
+    renewal_date: 2027-04-28
+    annual_amount:
+    currency_code: INR
+    auto_renew: false
+    status: active
+
+  - provider: omnidimension
+    category: Voice AI
+    product: Phone Number
+    asset_type: phone_number
+    asset_name: "+918048799517"
+    asset_identifier: "+918048799517"
+    renewal_date: 2026-07-16
+    annual_amount:
+    monthly_amount: 5.06
+    currency_code: USD
+    auto_renew: true
+    status: active
+
+  - provider: omnidimension
+    category: Voice AI
+    product: Phone Number
+    asset_type: phone_number
+    asset_name: "+19404334490"
+    asset_identifier: "+19404334490"
+    renewal_date: 2026-07-16
+    annual_amount:
+    monthly_amount: 5.00
+    currency_code: USD
+    auto_renew: true
+    status: active
+
+manual_usage_markers:
+  - provider: n8n_cloud
+    metric_name: monthly_execution_limit
+    value: 2500
+    unit: executions
+    source: subscription_plan
+
+  - provider: omnidimension
+    metric_name: wallet_balance
+    value: 62.11
+    unit: USD
+    source: screenshot
+
+  - provider: omnidimension
+    metric_name: minutes_left
+    value: 1412
+    unit: minutes
+    source: screenshot
+
+  - provider: omnidimension
+    metric_name: voice_rate
+    value: 0.044
+    unit: USD_per_minute
+    source: screenshot
+
+  - provider: omnidimension
+    metric_name: kb_rate
+    value: 0.25
+    unit: USD_per_100_MB
+    source: screenshot
+
+planning_fx_rates:
+  - currency_code: INR
+    to_currency_code: INR
+    fx_rate: 1.00
+    rate_date: 2026-07-01
+    source: identity
+
+  - currency_code: USD
+    to_currency_code: INR
+    fx_rate: 83.50
+    rate_date: 2026-07-01
+    source: planning_estimate
+
+  - currency_code: EUR
+    to_currency_code: INR
+    fx_rate: 90.00
+    rate_date: 2026-07-01
+    source: planning_estimate

@@ -1,0 +1,569 @@
+Digital Tools Spend Tracker - Project Map
+=========================================
+
+Project root:
+/Users/shivam/Work/Mediseller/Digital Tools Spend Tracker
+
+Current status:
+- Pre-Supabase dashboard work has started.
+- The current Python work includes the foundation layer:
+  - environment/config loading
+  - provider readiness classification
+  - connectivity checks
+  - notebook wrapper for operator/debug checks
+  - Streamlit dashboard for manual subscriptions, n8n, and OmniDimension snapshots
+- The current notebook is not the main dashboard. It only displays connectivity/status outputs.
+
+File to open today:
+- src/spend_tracker/dashboard/app.py
+  Purpose: Streamlit dashboard entrypoint for manual spend and live API snapshots.
+  Command: streamlit run src/spend_tracker/dashboard/app.py
+
+- notebooks/00_connectivity_checks.ipynb
+  Purpose: Run provider source status and connectivity checks from a notebook UI.
+
+Dashboard mode:
+- Pre-Supabase live/manual mode.
+- No durable history until Supabase connectivity is fixed.
+- Current source data:
+  - config/manual_items.yml
+  - .env manual subscription values
+  - live n8n API snapshot
+  - live OmniDimension API snapshot
+
+
+Supabase Namespace
+==================
+
+Schema:
+- digital_spend
+
+Purpose:
+- Internal operational visibility for digital tools, SaaS subscriptions, domains,
+  email licenses, AI tools, API usage costs, renewals, provider credentials metadata,
+  ingestion status, FX conversion, and alerts.
+
+Security/operating model:
+- RLS enabled on all tables.
+- Backend jobs use service role.
+- API keys are not stored in the database.
+- provider_credentials_metadata stores only environment variable names and validation status.
+- source_payload jsonb preserves raw provider payloads for debugging.
+
+
+Supabase Tables
+===============
+
+digital_spend.vendors
+- vendor_id
+- vendor_name
+- vendor_slug
+- vendor_category
+- billing_mode
+- dashboard_url
+- billing_url
+- account_reference
+- owner_name
+- owner_email
+- status
+- notes
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- One row per external provider/vendor, for example n8n, OmniDimension, BigRock,
+  GoDaddy/Titan, OpenAI, Anthropic, Google Cloud.
+
+
+digital_spend.products
+- product_id
+- vendor_id
+- product_name
+- product_slug
+- product_type
+- service_reference
+- dashboard_url
+- billing_url
+- is_usage_tracked
+- is_subscription_tracked
+- status
+- notes
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Products/services under vendors, for example ChatGPT Plus, Claude Pro, n8n Cloud,
+  OmniDimension voice AI, domain registration, professional email.
+
+
+digital_spend.subscriptions
+- subscription_id
+- vendor_id
+- product_id
+- subscription_name
+- plan_name
+- billing_cycle
+- amount
+- currency_code
+- subscription_start_date
+- renewal_date
+- cancellation_date
+- auto_renew
+- payment_method_label
+- dashboard_url
+- billing_url
+- invoice_folder_url
+- status
+- notes
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Recurring spend commitments such as monthly SaaS subscriptions or annual email plans.
+
+
+digital_spend.assets
+- asset_id
+- vendor_id
+- product_id
+- subscription_id
+- asset_type
+- asset_name
+- asset_identifier
+- owner_name
+- owner_email
+- purchase_date
+- activation_date
+- expiry_date
+- renewal_date
+- renewal_amount
+- currency_code
+- auto_renew
+- dashboard_url
+- admin_url
+- billing_url
+- status
+- notes
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Track individually renewable or attributable assets such as domains, email IDs,
+  phone numbers, API keys, workspaces, projects, and other tool-specific entities.
+
+
+digital_spend.usage_costs
+- usage_cost_id
+- vendor_id
+- product_id
+- subscription_id
+- asset_id
+- usage_date
+- usage_start_at
+- usage_end_at
+- provider_account_reference
+- service_name
+- sku_name
+- region_name
+- metric_name
+- usage_quantity
+- usage_unit
+- cost_amount
+- credits_amount
+- taxes_amount
+- net_cost_amount
+- currency_code
+- cost_amount_inr
+- credits_amount_inr
+- taxes_amount_inr
+- net_cost_amount_inr
+- fx_rate
+- fx_rate_date
+- source_system
+- source_record_id
+- source_fingerprint
+- source_payload
+- ingestion_run_id
+- dashboard_url
+- billing_url
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Time-series usage and cost records from APIs, billing exports, CSV files, or manual
+  inputs. This is the main table for usage spikes and spend trend reporting.
+
+
+digital_spend.provider_credentials_metadata
+- credential_metadata_id
+- vendor_id
+- credential_name
+- credential_type
+- environment_variable_name
+- is_required
+- is_configured
+- last_validated_at
+- last_validation_status
+- last_validation_message
+- rotation_due_date
+- dashboard_url
+- notes
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Secret-safe credential inventory. Stores metadata and env var names only, never
+  actual keys or passwords.
+
+
+digital_spend.alert_rules
+- alert_rule_id
+- vendor_id
+- product_id
+- subscription_id
+- asset_id
+- rule_name
+- rule_type
+- metric_name
+- comparison_operator
+- threshold_value
+- threshold_unit
+- lookback_window_days
+- reminder_days_before
+- notification_channel
+- severity
+- is_active
+- notes
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Configurable rules for renewal reminders, spike detection, threshold breaches,
+  and provider health warnings.
+
+
+digital_spend.alert_events
+- alert_event_id
+- alert_rule_id
+- vendor_id
+- product_id
+- subscription_id
+- asset_id
+- triggered_at
+- event_date
+- actual_value
+- threshold_value
+- message
+- status
+- acknowledged_at
+- acknowledged_by
+- resolved_at
+- resolved_by
+- source_payload
+- notes
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Alert history generated from alert_rules.
+
+
+digital_spend.ingestion_runs
+- ingestion_run_id
+- provider_slug
+- source_system
+- run_type
+- status
+- started_at
+- finished_at
+- rows_read
+- rows_inserted
+- rows_updated
+- rows_skipped
+- error_count
+- cursor_from
+- cursor_to
+- error_message
+- metadata
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Audit table for each ingestion/check/sync job run.
+
+
+digital_spend.ingestion_cursors
+- ingestion_cursor_id
+- provider_slug
+- source_system
+- cursor_key
+- cursor_value
+- cursor_payload
+- last_successful_run_id
+- last_successful_at
+- status
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Incremental ingestion state. Enables idempotent provider syncs without re-reading
+  the full source every time.
+
+
+digital_spend.fx_rates
+- fx_rate_id
+- from_currency_code
+- to_currency_code
+- rate_date
+- fx_rate
+- source_system
+- source_payload
+- created_at
+- created_by
+- last_updated_at
+- last_updated_by
+
+Purpose:
+- Exchange rates used to normalize provider amounts to INR while preserving original
+  currency and amount.
+
+
+Supabase Views
+==============
+
+digital_spend.vw_monthly_spend_summary
+Purpose:
+- Aggregates usage_costs by month, vendor, product, subscription, asset, and currency.
+- Intended for dashboard spend trend charts.
+
+digital_spend.vw_upcoming_renewals
+Purpose:
+- Combines subscription renewals and asset renewals into one dashboard-ready list.
+
+digital_spend.vw_provider_health
+Purpose:
+- Shows latest ingestion run status per provider/source.
+
+
+Project Namespaces And Files
+============================
+
+Root files
+----------
+
+.env
+- Local secrets/config values.
+- Do not print, share, or commit.
+
+.env.example
+- Secret-free environment variable template.
+
+.gitignore
+- Ignores .env, .venv, caches, logs, local data, exports, and secrets folders.
+
+README.md
+- Original high-level project summary and scope.
+
+README_PYTHON.md
+- Python setup and command usage notes.
+
+MVP-Architecture.png
+- Existing architecture image.
+
+pyproject.toml
+- Python package metadata, pinned runtime dependencies, dev dependencies, CLI entrypoint,
+  and ruff configuration.
+
+PROJECT_MAP.txt
+- This file. Human-readable map of database tables, namespaces, and project files.
+
+
+config namespace
+----------------
+
+config/providers.yml
+- Provider registry/config notes.
+- Describes provider categories, billing mode, source type, dashboard URL env vars,
+  and expected detail fields.
+
+config/manual_items.yml
+- Manual registry for non-API and pre-Supabase dashboard data.
+- Contains manual subscriptions, tracked assets, and manual usage markers.
+- This is non-secret operational data and should be updated as new tools, email IDs,
+  domains, phone numbers, and manual subscriptions are added.
+
+
+notebooks namespace
+-------------------
+
+notebooks/00_connectivity_checks.ipynb
+- Notebook wrapper over package code.
+- Displays provider status and connectivity results in tabular form.
+- Does not contain core provider logic.
+- This is the only file you can currently open for a UI-like view.
+
+
+scripts namespace
+-----------------
+
+scripts/check_connectivity.py
+- Thin script wrapper around the package CLI.
+- Equivalent to running spend-tracker commands after installing the package.
+
+
+src/spend_tracker namespace
+---------------------------
+
+src/spend_tracker/__init__.py
+- Package marker and version.
+
+src/spend_tracker/config.py
+- Loads .env via pydantic-settings.
+- Validates required config.
+- Converts blank strings to None.
+- Keeps secrets as SecretStr so they are not accidentally printed.
+
+src/spend_tracker/provider_status.py
+- Classifies providers into statuses:
+  - api_ready
+  - manual_subscription
+  - manual_csv
+  - blocked_missing_credentials
+  - not_applicable
+
+src/spend_tracker/dashboard/app.py
+- Streamlit dashboard entrypoint.
+- Shows overview, manual spend, n8n, OmniDimension, and source health tabs.
+- Does not require Supabase connectivity.
+
+src/spend_tracker/dashboard/data.py
+- Data loading for dashboard.
+- Reads manual registry YAML.
+- Reads safe manual subscription values from .env via Settings.
+- Fetches live n8n and OmniDimension snapshots without printing secrets.
+
+src/spend_tracker/cli.py
+- CLI entrypoint.
+- Commands:
+  - spend-tracker status
+  - spend-tracker check
+  - spend-tracker check --provider supabase
+  - spend-tracker check --json
+
+
+src/spend_tracker/checks namespace
+----------------------------------
+
+src/spend_tracker/checks/base.py
+- Shared CheckState and CheckResult types.
+- Shared exception-to-result handling.
+
+src/spend_tracker/checks/__init__.py
+- Registers all available connectivity checks.
+
+src/spend_tracker/checks/supabase.py
+- Checks direct Supabase Postgres connectivity.
+- Checks expected digital_spend tables exist.
+- Checks service-role REST access to digital_spend.vendors.
+
+src/spend_tracker/checks/n8n.py
+- Checks n8n API access via X-N8N-API-KEY.
+- Uses workflows endpoint as a low-risk metadata check.
+
+src/spend_tracker/checks/omnidimension.py
+- Checks OmniDimension endpoints:
+  - /agents
+  - /phone_number/list
+  - /calls/logs
+
+src/spend_tracker/checks/google_bigquery.py
+- Skips if Google billing export env vars are incomplete.
+- If configured, checks BigQuery billing export table reachability.
+
+src/spend_tracker/checks/manual.py
+- Represents manual providers that should not have API checks:
+  - OpenAI ChatGPT Plus
+  - Anthropic Claude Pro
+  - BigRock
+  - GoDaddy/Titan Email
+
+
+tests namespace
+---------------
+
+tests/test_provider_status.py
+- Unit tests for provider status classification.
+
+
+Current Commands
+================
+
+Activate environment:
+cd "/Users/shivam/Work/Mediseller/Digital Tools Spend Tracker"
+source .venv/bin/activate
+
+Provider status:
+spend-tracker status
+
+Connectivity checks:
+spend-tracker check
+
+One provider:
+spend-tracker check --provider n8n_cloud
+spend-tracker check --provider omnidimension
+spend-tracker check --provider supabase
+
+Notebook:
+jupyter lab notebooks/00_connectivity_checks.ipynb
+
+Dashboard:
+streamlit run src/spend_tracker/dashboard/app.py
+
+
+Current Connectivity Status
+===========================
+
+Last observed:
+- n8n_cloud: pass
+- omnidimension: pass
+- google_cloud: skipped because billing export is incomplete
+- openai: skipped because manual subscription
+- anthropic: skipped because manual subscription
+- bigrock: skipped because manual CSV/dashboard tracking
+- titan_email: skipped because manual subscription/assets
+- supabase: failed hostname resolution for project/API and DB host from this machine
+
+Supabase hostname issue to verify:
+- SUPABASE_URL host: vpkziehwmhkmmtetpfl.supabase.co
+- SUPABASE_DB_HOST: db.vpkziehwmhkmmtetpfl.supabase.co
+
+
+Next Build Order
+================
+
+1. Run and review the pre-Supabase Streamlit dashboard.
+2. Resolve Supabase hostname/project URL issue.
+3. Add metadata seeders for vendors, products, subscriptions, assets, and credential metadata.
+4. Add ingestion_run/ingestion_cursor helpers.
+5. Build n8n and OmniDimension ingestion connectors.
+6. Move dashboard from live/manual snapshots to Supabase reporting views.
