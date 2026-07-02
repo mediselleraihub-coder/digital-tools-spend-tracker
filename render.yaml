@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: digital-tools-spend-tracker
+    runtime: docker
+    plan: starter
+    region: singapore
+    autoDeployTrigger: "off"
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DEFAULT_CURRENCY
+        value: INR
+      - key: TIMEZONE
+        value: Asia/Kolkata
+      - key: SUPABASE_URL
+        value: https://vpkkiehwmhkmmptetpfl.supabase.co
+      - key: SUPABASE_DB_HOST
+        value: aws-1-ap-northeast-1.pooler.supabase.com
+      - key: SUPABASE_DB_PORT
+        value: "5432"
+      - key: SUPABASE_DB_NAME
+        value: postgres
+      - key: SUPABASE_DB_USER
+        value: postgres.vpkkiehwmhkmmptetpfl
+      - key: SUPABASE_DB_PASSWORD
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: N8N_BASE_URL
+        value: https://mediselleraihub.app.n8n.cloud
+      - key: N8N_API_KEY
+        sync: false
+      - key: N8N_EXECUTION_LIMIT
+        value: "2500"
+      - key: OMNIDIMENSION_API_BASE_URL
+        value: https://backend.omnidim.io/api/v1
+      - key: OMNIDIMENSION_API_KEY
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
+      - key: GOOGLE_BILLING_EXPORT_PROJECT_ID
+        sync: false
+      - key: GOOGLE_BILLING_EXPORT_DATASET
+        sync: false
+      - key: GOOGLE_BILLING_EXPORT_TABLE
+        sync: false
