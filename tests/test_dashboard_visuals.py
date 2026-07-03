@@ -124,6 +124,24 @@ def test_higgsfield_summary_extracts_nested_api_fields() -> None:
     assert summary["monthly_usage_limit"] == 150
 
 
+def test_higgsfield_summary_preserves_zero_usage_and_credit_seat_limit() -> None:
+    summary = _higgsfield_summary_from_payloads(
+        {
+            "statistics": {"total_credits_spent": 0, "jobs_created": 0, "currency": "usd"},
+            "subscription": {
+                "plan_name": "ultra",
+                "credits_per_seat": 3000,
+                "current_period_end": "2026-07-22T12:18:16Z",
+            },
+        },
+        make_settings(),
+    )
+
+    assert summary["usage_this_month"] == 0
+    assert summary["monthly_usage_limit"] == 3000
+    assert summary["current_balance"] == Decimal("3000")
+
+
 def test_higgsfield_request_headers_support_cookie_and_extra_headers() -> None:
     headers = _higgsfield_request_headers(
         make_settings(

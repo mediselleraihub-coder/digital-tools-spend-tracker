@@ -823,6 +823,7 @@ def _higgsfield_summary_from_payloads(
             "credit_used",
             "used_credits",
             "total_credits",
+            "total_credits_spent",
             "usage",
             "total_usage",
             "credits_spent",
@@ -835,6 +836,7 @@ def _higgsfield_summary_from_payloads(
             "credit_limit",
             "credits_limit",
             "monthly_credits",
+            "credits_per_seat",
             "limit",
             "quota",
         ],
@@ -850,17 +852,28 @@ def _higgsfield_summary_from_payloads(
             "unit_amount",
         ],
     )
+    if _missing_value(current_balance):
+        current_balance = _subtract_values(monthly_usage_limit, usage_this_month)
     return {
         "plan_name": _first_mapping_value(
             merged,
             ["plan_name", "plan", "subscription_plan", "product_name", "name"],
         )
         or settings.higgsfield_plan_name,
-        "current_balance": current_balance or settings.higgsfield_current_balance,
+        "current_balance": _value_or_fallback(
+            current_balance,
+            settings.higgsfield_current_balance,
+        ),
         "balance_unit": settings.higgsfield_balance_unit,
-        "usage_this_month": usage_this_month or settings.higgsfield_usage_this_month,
-        "monthly_usage_limit": monthly_usage_limit or settings.higgsfield_monthly_usage_limit,
-        "monthly_cost": monthly_cost or settings.higgsfield_monthly_cost,
+        "usage_this_month": _value_or_fallback(
+            usage_this_month,
+            settings.higgsfield_usage_this_month,
+        ),
+        "monthly_usage_limit": _value_or_fallback(
+            monthly_usage_limit,
+            settings.higgsfield_monthly_usage_limit,
+        ),
+        "monthly_cost": _value_or_fallback(monthly_cost, settings.higgsfield_monthly_cost),
         "currency_code": _first_mapping_value(merged, ["currency", "currency_code"])
         or settings.higgsfield_currency_code,
         "renewal_date": _first_mapping_value(
@@ -872,6 +885,21 @@ def _higgsfield_summary_from_payloads(
         "billing_dashboard_url": settings.higgsfield_billing_dashboard_url,
         "api_payloads_loaded": len(payloads),
     }
+
+
+def _value_or_fallback(value: Any, fallback: Any) -> Any:
+    return fallback if _missing_value(value) else value
+
+
+def _missing_value(value: Any) -> bool:
+    return value in (None, "")
+
+
+def _subtract_values(left: Any, right: Any) -> Any:
+    try:
+        return Decimal(str(left)) - Decimal(str(right))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
 
 
 def _flatten_mapping(value: Any, prefix: str = "") -> dict[str, Any]:
