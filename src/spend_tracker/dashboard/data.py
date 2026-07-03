@@ -524,7 +524,10 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
 def higgsfield_snapshot(settings: Settings) -> ApiSnapshot:
     if (
         settings.higgsfield_api_base
-        and (settings.higgsfield_bearer_token or settings.higgsfield_cookie)
+        and (
+            getattr(settings, "higgsfield_bearer_token", None)
+            or getattr(settings, "higgsfield_cookie", None)
+        )
     ):
         return _fetch_higgsfield_api_snapshot(settings)
     return _manual_higgsfield_snapshot(
@@ -640,22 +643,26 @@ def _higgsfield_request_headers(settings: Settings) -> dict[str, str]:
         "Origin": "https://higgsfield.ai",
         "Referer": "https://higgsfield.ai/me/settings/usage",
     }
-    if settings.higgsfield_bearer_token:
-        token = settings.higgsfield_bearer_token.get_secret_value().strip()
+    bearer_token = getattr(settings, "higgsfield_bearer_token", None)
+    cookie = getattr(settings, "higgsfield_cookie", None)
+
+    if bearer_token:
+        token = bearer_token.get_secret_value().strip()
         if token.lower().startswith("bearer "):
             headers["Authorization"] = token
         else:
             headers["Authorization"] = f"Bearer {token}"
-    if settings.higgsfield_cookie:
-        headers["Cookie"] = settings.higgsfield_cookie.get_secret_value().strip()
+    if cookie:
+        headers["Cookie"] = cookie.get_secret_value().strip()
     headers.update(_higgsfield_extra_headers(settings))
     return headers
 
 
 def _higgsfield_extra_headers(settings: Settings) -> dict[str, str]:
-    if not settings.higgsfield_extra_headers_json:
+    extra_headers_json = getattr(settings, "higgsfield_extra_headers_json", None)
+    if not extra_headers_json:
         return {}
-    raw_headers = settings.higgsfield_extra_headers_json.get_secret_value()
+    raw_headers = extra_headers_json.get_secret_value()
     try:
         parsed = json.loads(raw_headers)
     except json.JSONDecodeError:

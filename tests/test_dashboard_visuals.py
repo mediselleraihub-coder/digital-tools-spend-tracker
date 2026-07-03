@@ -135,3 +135,13 @@ def test_higgsfield_request_headers_support_cookie_and_extra_headers() -> None:
     assert headers["Cookie"] == "__session=session-token"
     assert headers["x-client"] == "web"
     assert "host" not in {key.lower() for key in headers}
+
+
+def test_higgsfield_request_headers_tolerate_older_settings_shape() -> None:
+    class OlderSettings:
+        higgsfield_bearer_token = None
+
+    headers = _higgsfield_request_headers(OlderSettings())  # type: ignore[arg-type]
+
+    assert headers["Accept"] == "application/json"
+    assert "Cookie" not in headers
