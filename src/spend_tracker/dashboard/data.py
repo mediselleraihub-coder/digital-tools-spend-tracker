@@ -11,6 +11,8 @@ import httpx
 import pandas as pd
 import psycopg
 import yaml
+from google.cloud import bigquery
+from google.oauth2 import service_account
 
 from spend_tracker.config import PROJECT_ROOT, Settings
 from spend_tracker.provider_status import classify_providers
@@ -100,6 +102,18 @@ def manual_subscriptions_dataframe(settings: Settings) -> pd.DataFrame:
             "amount": settings.n8n_monthly_cost,
             "currency_code": "EUR",
             "renewal_date": settings.n8n_renewal_date,
+            "source": "env",
+            "status": "active",
+        },
+        {
+            "provider": "higgsfield_ai",
+            "category": "AI Creative",
+            "product": "Higgsfield AI",
+            "plan": settings.higgsfield_plan_name,
+            "billing_cycle": "monthly",
+            "amount": settings.higgsfield_monthly_cost,
+            "currency_code": settings.higgsfield_currency_code,
+            "renewal_date": settings.higgsfield_renewal_date,
             "source": "env",
             "status": "active",
         },
@@ -394,6 +408,139 @@ def fetch_omnidimension_snapshot(settings: Settings) -> ApiSnapshot:
         return ApiSnapshot("omnidimension", "fail", {}, {}, f"{exc.__class__.__name__}: {exc}")
 
 
+def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -> ApiSnapshot:
+    missing = []
+    if not settings.google_billing_export_project_id:
+        missing.append("GOOGLE_BILLING_EXPORT_PROJECT_ID")
+    if not settings.google_billing_export_dataset:
+        missing.append("GOOGLE_BILLING_EXPORT_DATASET")
+    if not settings.google_billing_export_table:
+        missing.append("GOOGLE_BILLING_EXPORT_TABLE")
+    if (
+        not settings.google_application_credentials
+        and not settings.google_application_credentials_json
+    ):
+        missing.append("GOOGLE_APPLICATION_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS")
+    if missing:
+        return ApiSnapshot(
+            "gemini",
+            "skipped",
+            {"missing": missing},
+            {},
+            f"Missing Gemini billing export settings: {', '.join(missing)}",
+        )
+
+    table_id = (
+        f"{settings.google_billing_export_project_id}."
+        f"{settings.google_billing_export_dataset}."
+        f"{settings.google_billing_export_table}"
+    )
+    query = f"""
+        WITH gemini_costs AS (
+          SELECT
+            DATE(usage_start_time) AS usage_date,
+            project.id AS project_id,
+            service.description AS service_description,
+            sku.description AS sku_description,
+            currency,
+            SUM(cost) AS gross_cost,
+            SUM((
+              SELECT COALESCE(SUM(credit.amount), 0)
+              FROM UNNEST(credits) AS credit
+            )) AS credits
+          FROM `{table_id}`
+          WHERE usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @lookback_days DAY)
+            AND (
+              LOWER(service.description) LIKE '%gemini%'
+              OR LOWER(sku.description) LIKE '%gemini%'
+              OR LOWER(sku.description) LIKE '%generative%'
+              OR LOWER(sku.description) LIKE '%imagen%'
+              OR LOWER(sku.description) LIKE '%veo%'
+            )
+          GROUP BY usage_date, project_id, service_description, sku_description, currency
+        )
+        SELECT
+          usage_date,
+          project_id,
+          service_description,
+          sku_description,
+          currency,
+          gross_cost,
+          credits,
+          gross_cost + credits AS net_cost
+        FROM gemini_costs
+        ORDER BY usage_date DESC, net_cost DESC
+    """
+    try:
+        client = _bigquery_client(settings)
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("lookback_days", "INT64", lookback_days)
+            ]
+        )
+        rows = [dict(row.items()) for row in client.query(query, job_config=job_config).result()]
+        frame = pd.DataFrame(rows)
+        summary = _gemini_billing_summary(frame, settings)
+        return ApiSnapshot(
+            "gemini",
+            "pass",
+            summary,
+            {"billing_rows": frame},
+        )
+    except Exception as exc:
+        return ApiSnapshot("gemini", "fail", {}, {}, f"{exc.__class__.__name__}: {exc}")
+
+
+def higgsfield_snapshot(settings: Settings) -> ApiSnapshot:
+    rows = [
+        {
+            "metric": "current_balance",
+            "value": settings.higgsfield_current_balance,
+            "unit": settings.higgsfield_balance_unit,
+            "source": "manual_secret",
+        },
+        {
+            "metric": "usage_this_month",
+            "value": settings.higgsfield_usage_this_month,
+            "unit": settings.higgsfield_balance_unit,
+            "source": "manual_secret",
+        },
+        {
+            "metric": "monthly_usage_limit",
+            "value": settings.higgsfield_monthly_usage_limit,
+            "unit": settings.higgsfield_balance_unit,
+            "source": "manual_secret",
+        },
+        {
+            "metric": "monthly_cost",
+            "value": settings.higgsfield_monthly_cost,
+            "unit": settings.higgsfield_currency_code,
+            "source": "manual_secret",
+        },
+    ]
+    frame = pd.DataFrame(rows)
+    configured = any(row["value"] not in (None, "") for row in rows)
+    summary = {
+        "plan_name": settings.higgsfield_plan_name,
+        "current_balance": settings.higgsfield_current_balance,
+        "balance_unit": settings.higgsfield_balance_unit,
+        "usage_this_month": settings.higgsfield_usage_this_month,
+        "monthly_usage_limit": settings.higgsfield_monthly_usage_limit,
+        "monthly_cost": settings.higgsfield_monthly_cost,
+        "currency_code": settings.higgsfield_currency_code,
+        "renewal_date": settings.higgsfield_renewal_date,
+        "usage_dashboard_url": settings.higgsfield_usage_dashboard_url,
+        "billing_dashboard_url": settings.higgsfield_billing_dashboard_url,
+    }
+    return ApiSnapshot(
+        "higgsfield_ai",
+        "manual" if configured else "skipped",
+        summary,
+        {"manual_metrics": frame},
+        None if configured else "Higgsfield manual cost/balance settings are not configured",
+    )
+
+
 def monthly_totals_by_currency(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["currency_code", "monthly_equivalent"])
@@ -431,6 +578,52 @@ def streamlit_safe_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
         if display[column].dtype == "object":
             display[column] = display[column].map(_streamlit_safe_object_value)
     return display
+
+
+def _bigquery_client(settings: Settings) -> bigquery.Client:
+    if settings.google_application_credentials_json:
+        info = json.loads(settings.google_application_credentials_json.get_secret_value())
+        credentials = service_account.Credentials.from_service_account_info(info)
+        return bigquery.Client(
+            project=settings.google_billing_export_project_id,
+            credentials=credentials,
+        )
+    return bigquery.Client(
+        project=settings.google_billing_export_project_id,
+        credentials=service_account.Credentials.from_service_account_file(
+            settings.google_application_credentials
+        ),
+    )
+
+
+def _gemini_billing_summary(frame: pd.DataFrame, settings: Settings) -> dict[str, Any]:
+    if frame.empty:
+        return {
+            "rows": 0,
+            "current_month_cost": 0,
+            "currency": settings.default_currency,
+            "project_spend_cap_usd": settings.google_ai_studio_project_spend_cap_usd,
+            "monthly_usage_limit_usd": settings.google_ai_studio_monthly_usage_limit_usd,
+        }
+    costs = pd.to_numeric(frame["net_cost"], errors="coerce").fillna(0)
+    dates = pd.to_datetime(frame["usage_date"], errors="coerce")
+    month_start = pd.Timestamp.today().replace(day=1).date()
+    current_month = frame[dates.dt.date >= month_start]
+    current_month_cost = pd.to_numeric(current_month["net_cost"], errors="coerce").fillna(0).sum()
+    currency = (
+        frame["currency"].dropna().iloc[0]
+        if "currency" in frame and not frame.empty
+        else None
+    )
+    return {
+        "rows": len(frame),
+        "total_cost": float(costs.sum()),
+        "current_month_cost": float(current_month_cost),
+        "currency": currency or settings.default_currency,
+        "project_spend_cap_usd": settings.google_ai_studio_project_spend_cap_usd,
+        "monthly_usage_limit_usd": settings.google_ai_studio_monthly_usage_limit_usd,
+        "latest_usage_date": dates.max().date().isoformat() if not dates.dropna().empty else None,
+    }
 
 
 def _payload_records(payload: Any) -> list[dict[str, Any]]:

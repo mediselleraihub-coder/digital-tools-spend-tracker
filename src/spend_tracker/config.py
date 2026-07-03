@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     google_application_credentials: str | None = Field(
         default=None, alias="GOOGLE_APPLICATION_CREDENTIALS"
     )
+    google_application_credentials_json: SecretStr | None = Field(
+        default=None, alias="GOOGLE_APPLICATION_CREDENTIALS_JSON"
+    )
     google_billing_export_project_id: str | None = Field(
         default=None, alias="GOOGLE_BILLING_EXPORT_PROJECT_ID"
     )
@@ -53,6 +56,20 @@ class Settings(BaseSettings):
     )
     google_cloud_billing_account_id: str | None = Field(
         default=None, alias="GOOGLE_CLOUD_BILLING_ACCOUNT_ID"
+    )
+    google_ai_studio_project_spend_cap_usd: str | None = Field(
+        default=None, alias="GOOGLE_AI_STUDIO_PROJECT_SPEND_CAP_USD"
+    )
+    google_ai_studio_monthly_usage_limit_usd: str | None = Field(
+        default=None, alias="GOOGLE_AI_STUDIO_MONTHLY_USAGE_LIMIT_USD"
+    )
+    google_ai_studio_spend_url: str = Field(
+        default="https://aistudio.google.com/app/spend",
+        alias="GOOGLE_AI_STUDIO_SPEND_URL",
+    )
+    google_ai_studio_billing_url: str = Field(
+        default="https://aistudio.google.com/app/billing",
+        alias="GOOGLE_AI_STUDIO_BILLING_URL",
     )
 
     openai_admin_api_key: SecretStr | None = Field(default=None, alias="OPENAI_ADMIN_API_KEY")
@@ -103,6 +120,25 @@ class Settings(BaseSettings):
     titan_api_key: SecretStr | None = Field(default=None, alias="TITAN_API_KEY")
     titan_monthly_cost: str | None = Field(default=None, alias="TITAN_MONTHLY_COST")
     titan_renewal_date: str | None = Field(default=None, alias="TITAN_RENEWAL_DATE")
+
+    higgsfield_plan_name: str | None = Field(default=None, alias="HIGGSFIELD_PLAN_NAME")
+    higgsfield_monthly_cost: str | None = Field(default=None, alias="HIGGSFIELD_MONTHLY_COST")
+    higgsfield_currency_code: str | None = Field(default="USD", alias="HIGGSFIELD_CURRENCY_CODE")
+    higgsfield_renewal_date: str | None = Field(default=None, alias="HIGGSFIELD_RENEWAL_DATE")
+    higgsfield_current_balance: str | None = Field(default=None, alias="HIGGSFIELD_CURRENT_BALANCE")
+    higgsfield_balance_unit: str = Field(default="credits", alias="HIGGSFIELD_BALANCE_UNIT")
+    higgsfield_monthly_usage_limit: str | None = Field(
+        default=None, alias="HIGGSFIELD_MONTHLY_USAGE_LIMIT"
+    )
+    higgsfield_usage_this_month: str | None = Field(
+        default=None, alias="HIGGSFIELD_USAGE_THIS_MONTH"
+    )
+    higgsfield_usage_dashboard_url: str | None = Field(
+        default=None, alias="HIGGSFIELD_USAGE_DASHBOARD_URL"
+    )
+    higgsfield_billing_dashboard_url: str | None = Field(
+        default=None, alias="HIGGSFIELD_BILLING_DASHBOARD_URL"
+    )
 
     @field_validator("*", mode="before")
     @classmethod

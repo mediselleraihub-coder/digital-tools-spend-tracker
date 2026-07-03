@@ -13,6 +13,7 @@ from spend_tracker.dashboard.app import (
 )
 from spend_tracker.dashboard.data import (
     combined_commitments_dataframe,
+    higgsfield_snapshot,
     manual_assets_dataframe,
     manual_subscriptions_dataframe,
     planning_fx_dataframe,
@@ -77,3 +78,20 @@ def test_dashboard_chart_frames_are_buildable() -> None:
 
     gauge = _quota_gauge(used=6, limit=2500)
     assert gauge.data
+
+
+def test_higgsfield_snapshot_uses_manual_settings() -> None:
+    snapshot = higgsfield_snapshot(
+        make_settings(
+            HIGGSFIELD_PLAN_NAME="Pro",
+            HIGGSFIELD_MONTHLY_COST="29",
+            HIGGSFIELD_CURRENT_BALANCE="120",
+            HIGGSFIELD_USAGE_THIS_MONTH="30",
+            HIGGSFIELD_MONTHLY_USAGE_LIMIT="200",
+        )
+    )
+
+    assert snapshot.status == "manual"
+    assert snapshot.summary["plan_name"] == "Pro"
+    assert snapshot.summary["current_balance"] == "120"
+    assert not snapshot.records["manual_metrics"].empty

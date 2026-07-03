@@ -12,8 +12,10 @@ from spend_tracker.config import load_settings
 from spend_tracker.dashboard.data import (
     check_supabase_persistence,
     combined_commitments_dataframe,
+    fetch_gemini_billing_snapshot,
     fetch_n8n_snapshot,
     fetch_omnidimension_snapshot,
+    higgsfield_snapshot,
     manual_assets_dataframe,
     manual_subscriptions_dataframe,
     planning_fx_dataframe,
@@ -78,6 +80,30 @@ def cached_omnidimension() -> dict[str, Any]:
     }
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_gemini_billing() -> dict[str, Any]:
+    snapshot = fetch_gemini_billing_snapshot(load_settings())
+    return {
+        "provider": snapshot.provider,
+        "status": snapshot.status,
+        "summary": snapshot.summary,
+        "records": snapshot.records,
+        "error": snapshot.error,
+    }
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_higgsfield() -> dict[str, Any]:
+    snapshot = higgsfield_snapshot(load_settings())
+    return {
+        "provider": snapshot.provider,
+        "status": snapshot.status,
+        "summary": snapshot.summary,
+        "records": snapshot.records,
+        "error": snapshot.error,
+    }
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def cached_persistence_status() -> dict[str, Any]:
     status = check_supabase_persistence(load_settings())
@@ -105,6 +131,8 @@ def main() -> None:
     commitments = combined_commitments_dataframe(manual_subscriptions, manual_assets, fx_rates)
     n8n_snapshot = cached_n8n()
     omni_snapshot = cached_omnidimension()
+    gemini_snapshot = cached_gemini_billing()
+    higgsfield = cached_higgsfield()
 
     with st.sidebar:
         st.header("Controls")
@@ -127,6 +155,7 @@ def main() -> None:
             "OmniDimension",
             "Titan / Email",
             "Gemini",
+            "Higgsfield",
             "Source Health",
         ]
     )
@@ -142,9 +171,19 @@ def main() -> None:
     with tabs[4]:
         render_titan_email(commitments, manual_assets)
     with tabs[5]:
-        render_gemini(settings)
+        render_gemini(settings, gemini_snapshot)
     with tabs[6]:
-        render_health(settings, n8n_snapshot, omni_snapshot, persistence_status, fx_rates)
+        render_higgsfield(higgsfield)
+    with tabs[7]:
+        render_health(
+            settings,
+            n8n_snapshot,
+            omni_snapshot,
+            gemini_snapshot,
+            higgsfield,
+            persistence_status,
+            fx_rates,
+        )
 
 
 def render_overview(
@@ -624,39 +663,111 @@ def render_titan_email(commitments: pd.DataFrame, assets: pd.DataFrame) -> None:
     st.dataframe(_display_frame(mailboxes), use_container_width=True, hide_index=True)
 
 
-def render_gemini(settings: Any) -> None:
+def render_gemini(settings: Any, snapshot: dict[str, Any]) -> None:
     st.subheader("Gemini / Google Cloud")
     google_ready = all(
         [
-            settings.google_application_credentials,
+            settings.google_application_credentials or settings.google_application_credentials_json,
             settings.google_billing_export_project_id,
             settings.google_billing_export_dataset,
             settings.google_billing_export_table,
         ]
     )
+    summary = snapshot.get("summary") or {}
+    records = snapshot.get("records") or {}
+    billing_rows = records.get("billing_rows", pd.DataFrame())
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Billing export", "Ready" if google_ready else "Blocked")
     col2.metric("Project ID", settings.google_cloud_project_id or "N/A")
-    col3.metric("Default reporting", "BigQuery export")
+    col3.metric(
+        "Current month cost",
+        _currency(summary.get("current_month_cost"), summary.get("currency")),
+    )
+    col4.metric("Project cap", _usd_or_na(summary.get("project_spend_cap_usd")))
+
+    render_snapshot_banner(snapshot)
 
     if not google_ready:
         st.warning(
             "Google/Gemini charts need Cloud Billing export details before real spend "
             "graphs can be rendered."
         )
+    elif billing_rows.empty and snapshot.get("status") == "pass":
+        st.info("Billing export is reachable, but no Gemini API cost rows were found yet.")
+
+    limit_col, action_col = st.columns(2)
+    with limit_col:
+        st.subheader("Spend cap control")
+        cap_frame = pd.DataFrame(
+            [
+                {
+                    "control": "Current tracked project cap",
+                    "value": settings.google_ai_studio_project_spend_cap_usd,
+                    "unit": "USD/month",
+                },
+                {
+                    "control": "Target monthly usage limit",
+                    "value": settings.google_ai_studio_monthly_usage_limit_usd,
+                    "unit": "USD/month",
+                },
+            ]
+        )
+        st.dataframe(_display_frame(cap_frame), use_container_width=True, hide_index=True)
+        st.caption(
+            "AI Studio project spend caps are edited in AI Studio. The dashboard tracks the "
+            "current/target values and links to the control page."
+        )
+    with action_col:
+        st.subheader("Google controls")
+        st.link_button("Open AI Studio spend cap", settings.google_ai_studio_spend_url)
+        st.link_button("Open AI Studio billing", settings.google_ai_studio_billing_url)
+
+    if not billing_rows.empty:
+        daily = _gemini_daily_cost(billing_rows)
+        by_sku = _gemini_cost_by_sku(billing_rows)
+
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Daily Gemini cost")
+            fig = px.area(
+                daily,
+                x="usage_date",
+                y="net_cost",
+                color_discrete_sequence=["#7c3aed"],
+                labels={"usage_date": "Date", "net_cost": f"Net cost ({summary.get('currency')})"},
+            )
+            _style_line(fig)
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+        with right:
+            st.subheader("Cost by model / SKU")
+            fig = px.bar(
+                by_sku.tail(12),
+                x="net_cost",
+                y="sku_description",
+                orientation="h",
+                color="sku_description",
+                color_discrete_sequence=COLOR_SEQUENCE,
+                labels={
+                    "net_cost": f"Net cost ({summary.get('currency')})",
+                    "sku_description": "SKU",
+                },
+                text="net_cost",
+            )
+            _style_bar(fig, texttemplate="%{x:,.2f}")
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
     reports = pd.DataFrame(
         [
             {
                 "report": "Daily Gemini spend in INR",
                 "source": "Google Cloud Billing BigQuery export",
-                "status": "ready_after_export",
+                "status": "live_when_export_configured",
             },
             {
                 "report": "Spend by model/SKU",
                 "source": "Billing export service/SKU fields",
-                "status": "ready_after_export",
+                "status": "live_when_export_configured",
             },
             {
                 "report": "Input vs output token trend",
@@ -675,35 +786,79 @@ def render_gemini(settings: Any) -> None:
             },
         ]
     )
+    st.subheader("Gemini report readiness")
     st.dataframe(reports, use_container_width=True, hide_index=True)
 
-    st.subheader("Expected Gemini dashboard layout")
-    sample = pd.DataFrame(
-        {
-            "metric": ["Daily spend", "Model mix", "Token efficiency", "Spike alerts"],
-            "visual": ["Line/area", "Treemap/bar", "Scatter/line", "Annotated line"],
-            "priority": ["High", "High", "Medium", "High"],
-            "weight": [1, 1, 1, 1],
-        }
+    render_dataframe_section("Gemini billing rows", billing_rows)
+
+
+def render_higgsfield(snapshot: dict[str, Any]) -> None:
+    st.subheader("Higgsfield AI")
+    render_snapshot_banner(snapshot)
+    summary = snapshot.get("summary") or {}
+    records = snapshot.get("records") or {}
+    metrics = records.get("manual_metrics", pd.DataFrame())
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Plan", summary.get("plan_name") or "N/A")
+    col2.metric(
+        "Current balance",
+        _metric_with_unit(summary.get("current_balance"), summary.get("balance_unit") or "credits"),
     )
-    fig = px.bar(
-        sample,
-        x="metric",
-        y="weight",
-        color="priority",
-        hover_data=["visual"],
-        color_discrete_sequence=COLOR_SEQUENCE,
-        labels={"value": "Planned visual"},
+    col3.metric(
+        "Usage this month",
+        _metric_with_unit(
+            summary.get("usage_this_month"),
+            summary.get("balance_unit") or "credits",
+        ),
     )
-    fig.update_yaxes(visible=False)
-    fig.update_layout(showlegend=True, margin=dict(l=0, r=0, t=8, b=0), height=320)
-    st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+    col4.metric(
+        "Monthly limit",
+        _metric_with_unit(
+            summary.get("monthly_usage_limit"),
+            summary.get("balance_unit") or "credits",
+        ),
+    )
+
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Usage limit utilization")
+        fig = _quota_gauge(
+            used=summary.get("usage_this_month"),
+            limit=summary.get("monthly_usage_limit"),
+        )
+        st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+    with right:
+        st.subheader("Cost markers")
+        cost_frame = pd.DataFrame(
+            [
+                {
+                    "metric": "monthly_cost",
+                    "value": summary.get("monthly_cost"),
+                    "unit": summary.get("currency_code"),
+                },
+                {
+                    "metric": "renewal_date",
+                    "value": summary.get("renewal_date"),
+                    "unit": "",
+                },
+            ]
+        )
+        st.dataframe(_display_frame(cost_frame), use_container_width=True, hide_index=True)
+        if summary.get("usage_dashboard_url"):
+            st.link_button("Open Higgsfield usage", summary["usage_dashboard_url"])
+        if summary.get("billing_dashboard_url"):
+            st.link_button("Open Higgsfield billing", summary["billing_dashboard_url"])
+
+    render_dataframe_section("Higgsfield manual metrics", metrics)
 
 
 def render_health(
     settings: Any,
     n8n_snapshot: dict[str, Any],
     omni_snapshot: dict[str, Any],
+    gemini_snapshot: dict[str, Any],
+    higgsfield_snapshot_data: dict[str, Any],
     persistence_status: dict[str, Any],
     fx_rates: pd.DataFrame,
 ) -> None:
@@ -728,6 +883,16 @@ def render_health(
                 "provider": "supabase",
                 "dashboard_status": persistence_status.get("status"),
                 "error": persistence_status.get("detail", {}).get("error"),
+            },
+            {
+                "provider": "gemini",
+                "dashboard_status": gemini_snapshot.get("status"),
+                "error": gemini_snapshot.get("error"),
+            },
+            {
+                "provider": "higgsfield_ai",
+                "dashboard_status": higgsfield_snapshot_data.get("status"),
+                "error": higgsfield_snapshot_data.get("error"),
             },
         ]
     )
@@ -764,6 +929,8 @@ def render_snapshot_banner(snapshot: dict[str, Any]) -> None:
         st.success("Live API snapshot loaded.")
     elif status == "partial":
         st.warning(f"Partial API snapshot loaded. {error or ''}")
+    elif status == "manual":
+        st.info("Manual provider metrics loaded.")
     elif status == "skipped":
         st.info(error or "Source skipped.")
     else:
@@ -862,6 +1029,24 @@ def _currency_exposure(commitments: pd.DataFrame) -> pd.DataFrame:
             monthly_inr=("monthly_inr", lambda values: sum(_decimal_to_float(v) for v in values)),
         )
         .reset_index()
+    )
+
+
+def _gemini_daily_cost(frame: pd.DataFrame) -> pd.DataFrame:
+    daily = frame.copy()
+    daily["usage_date"] = pd.to_datetime(daily["usage_date"], errors="coerce").dt.date
+    daily["net_cost"] = pd.to_numeric(daily["net_cost"], errors="coerce").fillna(0)
+    return daily.groupby("usage_date")["net_cost"].sum().reset_index().sort_values("usage_date")
+
+
+def _gemini_cost_by_sku(frame: pd.DataFrame) -> pd.DataFrame:
+    by_sku = frame.copy()
+    by_sku["net_cost"] = pd.to_numeric(by_sku["net_cost"], errors="coerce").fillna(0)
+    return (
+        by_sku.groupby("sku_description", dropna=False)["net_cost"]
+        .sum()
+        .reset_index()
+        .sort_values("net_cost", ascending=True)
     )
 
 
@@ -1015,6 +1200,20 @@ def _metric_with_unit(value: Any, unit: str) -> str:
     if value is None:
         return "N/A"
     return f"{value} {unit}"
+
+
+def _currency(value: Any, currency_code: Any) -> str:
+    if value is None:
+        return "N/A"
+    amount = _to_float(value)
+    currency_label = currency_code or ""
+    return f"{currency_label} {amount:,.2f}".strip()
+
+
+def _usd_or_na(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return f"USD {_to_float(value):,.2f}"
 
 
 def _inr(value: Decimal | float | int) -> str:
