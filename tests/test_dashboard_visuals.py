@@ -12,6 +12,7 @@ from spend_tracker.dashboard.app import (
     _renewal_month_exposure,
 )
 from spend_tracker.dashboard.data import (
+    _higgsfield_request_headers,
     _higgsfield_summary_from_payloads,
     combined_commitments_dataframe,
     higgsfield_snapshot,
@@ -119,3 +120,18 @@ def test_higgsfield_summary_extracts_nested_api_fields() -> None:
     assert summary["usage_this_month"] == 42
     assert summary["current_balance"] == 108
     assert summary["monthly_usage_limit"] == 150
+
+
+def test_higgsfield_request_headers_support_cookie_and_extra_headers() -> None:
+    headers = _higgsfield_request_headers(
+        make_settings(
+            HIGGSFIELD_BEARER_TOKEN="Bearer clerk-token",
+            HIGGSFIELD_COOKIE="__session=session-token",
+            HIGGSFIELD_EXTRA_HEADERS_JSON='{"x-client": "web", "host": "blocked"}',
+        )
+    )
+
+    assert headers["Authorization"] == "Bearer clerk-token"
+    assert headers["Cookie"] == "__session=session-token"
+    assert headers["x-client"] == "web"
+    assert "host" not in {key.lower() for key in headers}

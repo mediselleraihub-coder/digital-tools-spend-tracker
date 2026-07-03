@@ -147,6 +147,14 @@ class Settings(BaseSettings):
         default=None,
         alias="HIGGSFIELD_BEARER_TOKEN",
     )
+    higgsfield_cookie: SecretStr | None = Field(
+        default=None,
+        alias="HIGGSFIELD_COOKIE",
+    )
+    higgsfield_extra_headers_json: SecretStr | None = Field(
+        default=None,
+        alias="HIGGSFIELD_EXTRA_HEADERS_JSON",
+    )
 
     @field_validator("*", mode="before")
     @classmethod

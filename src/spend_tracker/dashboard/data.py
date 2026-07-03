@@ -522,11 +522,15 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
 
 
 def higgsfield_snapshot(settings: Settings) -> ApiSnapshot:
-    if settings.higgsfield_api_base and settings.higgsfield_bearer_token:
+    if (
+        settings.higgsfield_api_base
+        and (settings.higgsfield_bearer_token or settings.higgsfield_cookie)
+    ):
         return _fetch_higgsfield_api_snapshot(settings)
     return _manual_higgsfield_snapshot(
         settings,
-        "HIGGSFIELD_BEARER_TOKEN is not configured; showing manual fallback fields",
+        "HIGGSFIELD_BEARER_TOKEN or HIGGSFIELD_COOKIE is not configured; "
+        "showing manual fallback fields",
     )
 
 
@@ -541,10 +545,7 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
     base_url = _higgsfield_api_base_url(settings)
     month_start = pd.Timestamp.today().replace(day=1).date().isoformat()
     today = date.today().isoformat()
-    headers = {
-        "Authorization": f"Bearer {settings.higgsfield_bearer_token.get_secret_value()}",
-        "Accept": "application/json",
-    }
+    headers = _higgsfield_request_headers(settings)
     endpoints = {
         "statistics": (
             "/workspaces/credit-ledger/statistics",
@@ -592,18 +593,35 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
 
         summary = _higgsfield_summary_from_payloads(payloads, settings)
         records["endpoint_statuses"] = pd.DataFrame(endpoint_statuses)
-        status = "pass" if payloads.get("statistics") else "partial"
+        unauthorized = [
+            item for item in endpoint_statuses if item["status_code"] in {401, 403}
+        ]
+        all_unauthorized = len(unauthorized) == len(endpoint_statuses)
+        if all_unauthorized:
+            status = "fail"
+        elif payloads.get("statistics"):
+            status = "pass"
+        else:
+            status = "partial"
         errors = [
             f"{item['endpoint']}: HTTP {item['status_code']}"
             for item in endpoint_statuses
             if not item["ok"]
         ]
+        error_message = "; ".join(errors) if status in {"partial", "fail"} and errors else None
+        if all_unauthorized:
+            error_message = (
+                "Higgsfield token expired or missing cookie/session auth. "
+                "Refresh HIGGSFIELD_BEARER_TOKEN or add HIGGSFIELD_COOKIE/"
+                "HIGGSFIELD_EXTRA_HEADERS_JSON from a working browser request. "
+                f"{error_message}"
+            )
         return ApiSnapshot(
             "higgsfield_ai",
             status,
             summary,
             records,
-            "; ".join(errors) if status == "partial" and errors else None,
+            error_message,
         )
     except Exception as exc:
         manual = _manual_higgsfield_snapshot(settings, None)
@@ -614,6 +632,46 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
             manual.records,
             f"{exc.__class__.__name__}: {exc}",
         )
+
+
+def _higgsfield_request_headers(settings: Settings) -> dict[str, str]:
+    headers = {
+        "Accept": "application/json",
+        "Origin": "https://higgsfield.ai",
+        "Referer": "https://higgsfield.ai/me/settings/usage",
+    }
+    if settings.higgsfield_bearer_token:
+        token = settings.higgsfield_bearer_token.get_secret_value().strip()
+        if token.lower().startswith("bearer "):
+            headers["Authorization"] = token
+        else:
+            headers["Authorization"] = f"Bearer {token}"
+    if settings.higgsfield_cookie:
+        headers["Cookie"] = settings.higgsfield_cookie.get_secret_value().strip()
+    headers.update(_higgsfield_extra_headers(settings))
+    return headers
+
+
+def _higgsfield_extra_headers(settings: Settings) -> dict[str, str]:
+    if not settings.higgsfield_extra_headers_json:
+        return {}
+    raw_headers = settings.higgsfield_extra_headers_json.get_secret_value()
+    try:
+        parsed = json.loads(raw_headers)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+
+    blocked_headers = {"host", "content-length", "connection", "accept-encoding"}
+    headers = {}
+    for key, value in parsed.items():
+        if not isinstance(key, str) or value in (None, ""):
+            continue
+        if key.lower() in blocked_headers:
+            continue
+        headers[key] = str(value)
+    return headers
 
 
 def _manual_higgsfield_snapshot(settings: Settings, error: str | None = None) -> ApiSnapshot:
