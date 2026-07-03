@@ -139,6 +139,14 @@ class Settings(BaseSettings):
     higgsfield_billing_dashboard_url: str | None = Field(
         default=None, alias="HIGGSFIELD_BILLING_DASHBOARD_URL"
     )
+    higgsfield_api_base: AnyUrl | None = Field(
+        default="https://dash.higgsfield.ai",
+        alias="HIGGSFIELD_API_BASE",
+    )
+    higgsfield_bearer_token: SecretStr | None = Field(
+        default=None,
+        alias="HIGGSFIELD_BEARER_TOKEN",
+    )
 
     @field_validator("*", mode="before")
     @classmethod

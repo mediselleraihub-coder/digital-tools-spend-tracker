@@ -12,6 +12,7 @@ from spend_tracker.dashboard.app import (
     _renewal_month_exposure,
 )
 from spend_tracker.dashboard.data import (
+    _higgsfield_summary_from_payloads,
     combined_commitments_dataframe,
     higgsfield_snapshot,
     manual_assets_dataframe,
@@ -95,3 +96,26 @@ def test_higgsfield_snapshot_uses_manual_settings() -> None:
     assert snapshot.summary["plan_name"] == "Pro"
     assert snapshot.summary["current_balance"] == "120"
     assert not snapshot.records["manual_metrics"].empty
+
+
+def test_higgsfield_summary_extracts_nested_api_fields() -> None:
+    summary = _higgsfield_summary_from_payloads(
+        {
+            "usage_stats": {"data": {"credits_used": 42}},
+            "subscription": {
+                "subscription": {
+                    "plan_name": "Creator",
+                    "current_period_end": "2026-07-31",
+                    "currency": "USD",
+                    "amount": 19,
+                }
+            },
+            "credits": {"credits": {"remaining_credits": 108, "credit_limit": 150}},
+        },
+        make_settings(),
+    )
+
+    assert summary["plan_name"] == "Creator"
+    assert summary["usage_this_month"] == 42
+    assert summary["current_balance"] == 108
+    assert summary["monthly_usage_limit"] == 150

@@ -492,6 +492,85 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
 
 
 def higgsfield_snapshot(settings: Settings) -> ApiSnapshot:
+    if settings.higgsfield_api_base and settings.higgsfield_bearer_token:
+        return _fetch_higgsfield_api_snapshot(settings)
+    return _manual_higgsfield_snapshot(
+        settings,
+        "HIGGSFIELD_BEARER_TOKEN is not configured; showing manual fallback fields",
+    )
+
+
+def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
+    base_url = str(settings.higgsfield_api_base).rstrip("/")
+    month_start = pd.Timestamp.today().replace(day=1).date().isoformat()
+    today = date.today().isoformat()
+    headers = {
+        "Authorization": f"Bearer {settings.higgsfield_bearer_token.get_secret_value()}",
+        "Accept": "application/json",
+    }
+    endpoints = {
+        "usage_stats": (
+            "/api/v1/usage/stats/",
+            {"start_date": month_start, "end_date": today},
+        ),
+        "billing": ("/api/v1/billing", None),
+        "subscription": ("/api/v1/subscription", None),
+        "credits": ("/api/v1/credits", None),
+        "invoices": ("/api/v1/invoices", None),
+        "account": ("/api/v1/account", None),
+        "me": ("/api/v1/me", None),
+        "organizations": ("/api/v1/organizations", None),
+    }
+    records: dict[str, pd.DataFrame] = {}
+    payloads: dict[str, Any] = {}
+    endpoint_statuses: list[dict[str, Any]] = []
+
+    try:
+        with httpx.Client(timeout=20, headers=headers) as client:
+            for name, (path, params) in endpoints.items():
+                response = client.get(f"{base_url}{path}", params=params)
+                endpoint_statuses.append(
+                    {
+                        "endpoint": name,
+                        "path": path,
+                        "status_code": response.status_code,
+                        "ok": response.status_code == 200,
+                    }
+                )
+                if response.status_code != 200:
+                    records[name] = pd.DataFrame()
+                    continue
+                payload = response.json()
+                payloads[name] = payload
+                records[name] = _payload_frame(payload)
+
+        summary = _higgsfield_summary_from_payloads(payloads, settings)
+        records["endpoint_statuses"] = pd.DataFrame(endpoint_statuses)
+        status = "pass" if payloads.get("usage_stats") else "partial"
+        errors = [
+            f"{item['endpoint']}: HTTP {item['status_code']}"
+            for item in endpoint_statuses
+            if not item["ok"]
+        ]
+        return ApiSnapshot(
+            "higgsfield_ai",
+            status,
+            summary,
+            records,
+            "; ".join(errors) if status == "partial" and errors else None,
+        )
+    except Exception as exc:
+        manual = _manual_higgsfield_snapshot(settings, None)
+        return ApiSnapshot(
+            "higgsfield_ai",
+            "fail",
+            manual.summary,
+            manual.records,
+            f"{exc.__class__.__name__}: {exc}",
+        )
+
+
+def _manual_higgsfield_snapshot(settings: Settings, error: str | None = None) -> ApiSnapshot:
     rows = [
         {
             "metric": "current_balance",
@@ -537,8 +616,124 @@ def higgsfield_snapshot(settings: Settings) -> ApiSnapshot:
         "manual" if configured else "skipped",
         summary,
         {"manual_metrics": frame},
-        None if configured else "Higgsfield manual cost/balance settings are not configured",
+        error
+        if error
+        else None
+        if configured
+        else "Higgsfield manual cost/balance settings are not configured",
     )
+
+
+def _payload_frame(payload: Any) -> pd.DataFrame:
+    records = _payload_records(payload)
+    if records:
+        return pd.DataFrame(records)
+    if isinstance(payload, dict):
+        return pd.DataFrame([_flatten_mapping(payload)])
+    return pd.DataFrame([{"value": payload}])
+
+
+def _higgsfield_summary_from_payloads(
+    payloads: dict[str, Any],
+    settings: Settings,
+) -> dict[str, Any]:
+    merged = {
+        key: value
+        for payload in payloads.values()
+        for key, value in _flatten_mapping(payload).items()
+    }
+    usage_payload = payloads.get("usage_stats", {})
+    usage_flat = _flatten_mapping(usage_payload)
+
+    current_balance = _first_mapping_value(
+        merged,
+        [
+            "current_balance",
+            "credit_balance",
+            "credits_balance",
+            "remaining_credits",
+            "balance",
+            "available_credits",
+        ],
+    )
+    usage_this_month = _first_mapping_value(
+        usage_flat,
+        [
+            "credits_used",
+            "credit_used",
+            "used_credits",
+            "total_credits",
+            "usage",
+            "total_usage",
+            "credits_spent",
+        ],
+    )
+    monthly_usage_limit = _first_mapping_value(
+        merged,
+        [
+            "monthly_usage_limit",
+            "credit_limit",
+            "credits_limit",
+            "monthly_credits",
+            "limit",
+            "quota",
+        ],
+    )
+    monthly_cost = _first_mapping_value(
+        merged,
+        [
+            "monthly_cost",
+            "amount",
+            "price",
+            "subscription_amount",
+            "plan_amount",
+            "unit_amount",
+        ],
+    )
+    return {
+        "plan_name": _first_mapping_value(
+            merged,
+            ["plan_name", "plan", "subscription_plan", "product_name", "name"],
+        )
+        or settings.higgsfield_plan_name,
+        "current_balance": current_balance or settings.higgsfield_current_balance,
+        "balance_unit": settings.higgsfield_balance_unit,
+        "usage_this_month": usage_this_month or settings.higgsfield_usage_this_month,
+        "monthly_usage_limit": monthly_usage_limit or settings.higgsfield_monthly_usage_limit,
+        "monthly_cost": monthly_cost or settings.higgsfield_monthly_cost,
+        "currency_code": _first_mapping_value(merged, ["currency", "currency_code"])
+        or settings.higgsfield_currency_code,
+        "renewal_date": _first_mapping_value(
+            merged,
+            ["renewal_date", "current_period_end", "next_billing_date", "period_end"],
+        )
+        or settings.higgsfield_renewal_date,
+        "usage_dashboard_url": settings.higgsfield_usage_dashboard_url,
+        "billing_dashboard_url": settings.higgsfield_billing_dashboard_url,
+        "api_payloads_loaded": len(payloads),
+    }
+
+
+def _flatten_mapping(value: Any, prefix: str = "") -> dict[str, Any]:
+    if isinstance(value, dict):
+        flattened = {}
+        for key, item in value.items():
+            child_key = f"{prefix}_{key}" if prefix else str(key)
+            flattened.update(_flatten_mapping(item, child_key))
+        return flattened
+    if isinstance(value, list):
+        return {prefix: json.dumps(value, default=str)} if prefix else {}
+    return {prefix: value} if prefix else {}
+
+
+def _first_mapping_value(mapping: dict[str, Any], candidates: list[str]) -> Any:
+    normalized = {key.lower(): value for key, value in mapping.items()}
+    for candidate in candidates:
+        candidate_lower = candidate.lower()
+        for key, value in normalized.items():
+            if key.endswith(candidate_lower) and value not in (None, ""):
+                return value
+    return None
 
 
 def monthly_totals_by_currency(frame: pd.DataFrame) -> pd.DataFrame:

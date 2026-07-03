@@ -798,6 +798,7 @@ def render_higgsfield(snapshot: dict[str, Any]) -> None:
     summary = snapshot.get("summary") or {}
     records = snapshot.get("records") or {}
     metrics = records.get("manual_metrics", pd.DataFrame())
+    endpoint_statuses = records.get("endpoint_statuses", pd.DataFrame())
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Plan", summary.get("plan_name") or "N/A")
@@ -850,7 +851,15 @@ def render_higgsfield(snapshot: dict[str, Any]) -> None:
         if summary.get("billing_dashboard_url"):
             st.link_button("Open Higgsfield billing", summary["billing_dashboard_url"])
 
+    if not endpoint_statuses.empty:
+        st.subheader("Higgsfield endpoint health")
+        st.dataframe(_display_frame(endpoint_statuses), use_container_width=True, hide_index=True)
+
     render_dataframe_section("Higgsfield manual metrics", metrics)
+    for name, frame in records.items():
+        if name in {"manual_metrics", "endpoint_statuses"}:
+            continue
+        render_dataframe_section(f"Higgsfield {name}", frame)
 
 
 def render_health(
