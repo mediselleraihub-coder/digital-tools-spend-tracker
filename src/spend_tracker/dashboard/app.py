@@ -9,13 +9,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from spend_tracker.config import load_settings
+from spend_tracker.dashboard import data as dashboard_data
 from spend_tracker.dashboard.data import (
     check_supabase_persistence,
     combined_commitments_dataframe,
-    fetch_gemini_billing_snapshot,
     fetch_n8n_snapshot,
     fetch_omnidimension_snapshot,
-    higgsfield_snapshot,
     manual_assets_dataframe,
     manual_subscriptions_dataframe,
     planning_fx_dataframe,
@@ -82,7 +81,13 @@ def cached_omnidimension() -> dict[str, Any]:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def cached_gemini_billing() -> dict[str, Any]:
-    snapshot = fetch_gemini_billing_snapshot(load_settings())
+    fetcher = getattr(dashboard_data, "fetch_gemini_billing_snapshot", None)
+    if fetcher is None:
+        return _missing_provider_snapshot(
+            "gemini",
+            "Gemini billing fetcher is not available in the deployed data module yet.",
+        )
+    snapshot = fetcher(load_settings())
     return {
         "provider": snapshot.provider,
         "status": snapshot.status,
@@ -94,13 +99,29 @@ def cached_gemini_billing() -> dict[str, Any]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_higgsfield() -> dict[str, Any]:
-    snapshot = higgsfield_snapshot(load_settings())
+    fetcher = getattr(dashboard_data, "higgsfield_snapshot", None)
+    if fetcher is None:
+        return _missing_provider_snapshot(
+            "higgsfield_ai",
+            "Higgsfield fetcher is not available in the deployed data module yet.",
+        )
+    snapshot = fetcher(load_settings())
     return {
         "provider": snapshot.provider,
         "status": snapshot.status,
         "summary": snapshot.summary,
         "records": snapshot.records,
         "error": snapshot.error,
+    }
+
+
+def _missing_provider_snapshot(provider: str, message: str) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "status": "skipped",
+        "summary": {},
+        "records": {},
+        "error": message,
     }
 
 
