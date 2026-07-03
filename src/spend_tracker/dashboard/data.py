@@ -393,7 +393,7 @@ def fetch_omnidimension_snapshot(settings: Settings) -> ApiSnapshot:
                     records[name] = pd.DataFrame()
                     continue
                 payload = response.json()
-                frame = pd.DataFrame(_payload_records(payload))
+                frame = _payload_frame(payload)
                 records[name] = frame
                 summary[f"{name}_sampled"] = len(frame)
 
@@ -414,8 +414,6 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
         missing.append("GOOGLE_BILLING_EXPORT_PROJECT_ID")
     if not settings.google_billing_export_dataset:
         missing.append("GOOGLE_BILLING_EXPORT_DATASET")
-    if not settings.google_billing_export_table:
-        missing.append("GOOGLE_BILLING_EXPORT_TABLE")
     if (
         not settings.google_application_credentials
         and not settings.google_application_credentials_json
@@ -430,11 +428,34 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
             f"Missing Gemini billing export settings: {', '.join(missing)}",
         )
 
-    table_id = (
-        f"{settings.google_billing_export_project_id}."
-        f"{settings.google_billing_export_dataset}."
-        f"{settings.google_billing_export_table}"
-    )
+    try:
+        client = _bigquery_client(settings)
+        table_name = settings.google_billing_export_table or _discover_billing_export_table(
+            client,
+            settings,
+        )
+    except Exception as exc:
+        return ApiSnapshot("gemini", "fail", {}, {}, f"{exc.__class__.__name__}: {exc}")
+
+    if not table_name:
+        return ApiSnapshot(
+            "gemini",
+            "skipped",
+            {
+                "project_id": settings.google_billing_export_project_id,
+                "dataset": settings.google_billing_export_dataset,
+            },
+            {},
+            "No Google detailed billing export table was found in the configured dataset",
+        )
+
+    table_id = table_name.strip("`")
+    if "." not in table_id:
+        table_id = (
+            f"{settings.google_billing_export_project_id}."
+            f"{settings.google_billing_export_dataset}."
+            f"{table_name}"
+        )
     query = f"""
         WITH gemini_costs AS (
           SELECT
@@ -443,6 +464,8 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
             service.description AS service_description,
             sku.description AS sku_description,
             currency,
+            SUM(usage.amount) AS usage_amount,
+            usage.unit AS usage_unit,
             SUM(cost) AS gross_cost,
             SUM((
               SELECT COALESCE(SUM(credit.amount), 0)
@@ -457,7 +480,13 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
               OR LOWER(sku.description) LIKE '%imagen%'
               OR LOWER(sku.description) LIKE '%veo%'
             )
-          GROUP BY usage_date, project_id, service_description, sku_description, currency
+          GROUP BY
+            usage_date,
+            project_id,
+            service_description,
+            sku_description,
+            currency,
+            usage_unit
         )
         SELECT
           usage_date,
@@ -465,6 +494,8 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
           service_description,
           sku_description,
           currency,
+          usage_amount,
+          usage_unit,
           gross_cost,
           credits,
           gross_cost + credits AS net_cost
@@ -472,7 +503,6 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
         ORDER BY usage_date DESC, net_cost DESC
     """
     try:
-        client = _bigquery_client(settings)
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("lookback_days", "INT64", lookback_days)
@@ -484,7 +514,7 @@ def fetch_gemini_billing_snapshot(settings: Settings, lookback_days: int = 90) -
         return ApiSnapshot(
             "gemini",
             "pass",
-            summary,
+            {**summary, "export_table": table_name},
             {"billing_rows": frame},
         )
     except Exception as exc:
@@ -509,24 +539,33 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
         "Accept": "application/json",
     }
     endpoints = {
-        "usage_stats": (
-            "/api/v1/usage/stats/",
+        "statistics": (
+            "/api/v1/statistics",
             {"start_date": month_start, "end_date": today},
         ),
-        "billing": ("/api/v1/billing", None),
+        "usage": ("/api/v1/usage", None),
         "subscription": ("/api/v1/subscription", None),
-        "credits": ("/api/v1/credits", None),
-        "invoices": ("/api/v1/invoices", None),
-        "account": ("/api/v1/account", None),
-        "me": ("/api/v1/me", None),
-        "organizations": ("/api/v1/organizations", None),
+        "subscription_features": ("/api/v1/subscription-features", {"version": "v2"}),
+        "history": ("/api/v1/history", {"size": "10", "page": "1", "is_active": "true"}),
+        "credit_ledger": (
+            "/api/v1/credit-ledger",
+            {"limit": "25", "page": "1", "start_date": month_start, "end_date": today},
+        ),
+        "pending_invoices": ("/api/v1/pending-invoices", {"limit": "25"}),
+        "payment_cards": ("/api/v1/payment-cards", {"limit": "25"}),
+        "details": ("/api/v1/details", None),
     }
     records: dict[str, pd.DataFrame] = {}
     payloads: dict[str, Any] = {}
     endpoint_statuses: list[dict[str, Any]] = []
 
     try:
-        with httpx.Client(timeout=20, headers=headers) as client:
+        request_headers = {
+            **headers,
+            "Origin": "https://higgsfield.ai",
+            "Referer": "https://higgsfield.ai/me/settings/usage",
+        }
+        with httpx.Client(timeout=20, headers=request_headers, follow_redirects=True) as client:
             for name, (path, params) in endpoints.items():
                 response = client.get(f"{base_url}{path}", params=params)
                 endpoint_statuses.append(
@@ -546,7 +585,7 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
 
         summary = _higgsfield_summary_from_payloads(payloads, settings)
         records["endpoint_statuses"] = pd.DataFrame(endpoint_statuses)
-        status = "pass" if payloads.get("usage_stats") else "partial"
+        status = "pass" if payloads.get("statistics") or payloads.get("usage") else "partial"
         errors = [
             f"{item['endpoint']}: HTTP {item['status_code']}"
             for item in endpoint_statuses
@@ -642,7 +681,7 @@ def _higgsfield_summary_from_payloads(
         for payload in payloads.values()
         for key, value in _flatten_mapping(payload).items()
     }
-    usage_payload = payloads.get("usage_stats", {})
+    usage_payload = payloads.get("statistics") or payloads.get("usage_stats") or {}
     usage_flat = _flatten_mapping(usage_payload)
 
     current_balance = _first_mapping_value(
@@ -791,6 +830,23 @@ def _bigquery_client(settings: Settings) -> bigquery.Client:
     )
 
 
+def _discover_billing_export_table(
+    client: bigquery.Client,
+    settings: Settings,
+) -> str | None:
+    dataset_ref = (
+        f"{settings.google_billing_export_project_id}."
+        f"{settings.google_billing_export_dataset}"
+    )
+    tables = list(client.list_tables(dataset_ref))
+    table_ids = [table.table_id for table in tables]
+    for prefix in ("gcp_billing_export_resource_v1_", "gcp_billing_export_v1_"):
+        matches = sorted(table_id for table_id in table_ids if table_id.startswith(prefix))
+        if matches:
+            return matches[0]
+    return None
+
+
 def _gemini_billing_summary(frame: pd.DataFrame, settings: Settings) -> dict[str, Any]:
     if frame.empty:
         return {
@@ -826,7 +882,17 @@ def _payload_records(payload: Any) -> list[dict[str, Any]]:
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
         return []
-    for key in ("data", "items", "results", "records", "logs", "agents", "phone_numbers"):
+    for key in (
+        "data",
+        "items",
+        "results",
+        "records",
+        "logs",
+        "agents",
+        "bots",
+        "phone_numbers",
+        "call_log_data",
+    ):
         value = payload.get(key)
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]

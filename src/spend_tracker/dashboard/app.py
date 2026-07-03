@@ -182,7 +182,14 @@ def main() -> None:
     )
 
     with tabs[0]:
-        render_overview(commitments, fx_rates, n8n_snapshot, omni_snapshot)
+        render_overview(
+            commitments,
+            fx_rates,
+            n8n_snapshot,
+            omni_snapshot,
+            gemini_snapshot,
+            higgsfield,
+        )
     with tabs[1]:
         render_renewals(commitments)
     with tabs[2]:
@@ -212,6 +219,8 @@ def render_overview(
     fx_rates: pd.DataFrame,
     n8n_snapshot: dict[str, Any],
     omni_snapshot: dict[str, Any],
+    gemini_snapshot: dict[str, Any],
+    higgsfield_snapshot_data: dict[str, Any],
 ) -> None:
     monthly_inr = _decimal_sum(commitments.get("monthly_inr"))
     annualized_inr = monthly_inr * 12
@@ -221,7 +230,10 @@ def render_overview(
     col1.metric("Monthly run-rate INR", _inr(monthly_inr))
     col2.metric("Annualized run-rate INR", _inr(annualized_inr))
     col3.metric("Renewals in 45 days", renewals_due_45)
-    col4.metric("Live API sources", _live_source_count(n8n_snapshot, omni_snapshot))
+    col4.metric(
+        "Live API sources",
+        _live_source_count(n8n_snapshot, omni_snapshot, gemini_snapshot, higgsfield_snapshot_data),
+    )
 
     if commitments.empty:
         st.info("No subscription or asset commitments are configured yet.")
@@ -298,6 +310,21 @@ def render_overview(
     st.subheader("Original currency exposure")
     currency_frame = _currency_exposure(commitments)
     st.dataframe(_display_frame(currency_frame), use_container_width=True, hide_index=True)
+
+    live_spend = _live_api_spend_frame(gemini_snapshot, higgsfield_snapshot_data, fx_rates)
+    if not live_spend.empty:
+        st.subheader("Live API spend this month")
+        fig = px.bar(
+            live_spend,
+            x="provider",
+            y="monthly_inr",
+            color="provider",
+            color_discrete_sequence=COLOR_SEQUENCE,
+            labels={"monthly_inr": "Spend INR", "provider": "Provider"},
+            text="monthly_inr",
+        )
+        _style_bar(fig, texttemplate="%{y:,.0f}")
+        st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
     with st.expander("Planning FX rates used for INR visuals"):
         st.dataframe(_display_frame(fx_rates), use_container_width=True, hide_index=True)
@@ -534,6 +561,7 @@ def render_omnidimension(
     summary = snapshot.get("summary") or {}
     records = snapshot.get("records") or {}
     calls = _prepare_generic_dated_records(records.get("call_logs", pd.DataFrame()))
+    agents = records.get("agents", pd.DataFrame())
     phone_renewals = commitments[commitments["provider"] == "omnidimension"].copy()
 
     markers = _markers_dict(usage_markers, "omnidimension")
@@ -552,6 +580,49 @@ def render_omnidimension(
         else:
             fig = px.bar(daily, x="date", y="calls", color_discrete_sequence=["#059669"])
             _style_bar(fig)
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+
+    with right:
+        st.subheader("Estimated call cost by day")
+        daily_cost = _daily_sum(calls, "event_time", "aggregated_estimated_cost", "cost")
+        if daily_cost.empty:
+            st.info("No dated cost rows returned.")
+        else:
+            fig = px.area(
+                daily_cost,
+                x="date",
+                y="cost",
+                color_discrete_sequence=["#7c3aed"],
+                labels={"date": "Date", "cost": "Estimated cost"},
+            )
+            _style_line(fig)
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Calls by agent")
+        agent_col = _first_existing_column(calls, ["bot_name", "agent_name", "bot_id", "agent_id"])
+        if calls.empty or agent_col is None:
+            st.info("Agent field not available in returned call logs.")
+        else:
+            grouped = (
+                calls.groupby(agent_col, dropna=False)
+                .size()
+                .reset_index(name="calls")
+                .sort_values("calls", ascending=True)
+                .tail(12)
+            )
+            fig = px.bar(
+                grouped,
+                x="calls",
+                y=agent_col,
+                orientation="h",
+                color=agent_col,
+                color_discrete_sequence=COLOR_SEQUENCE,
+                labels={"calls": "Calls", agent_col: "Agent"},
+                text="calls",
+            )
+            _style_bar(fig, texttemplate="%{x:,.0f}")
             st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
     with right:
@@ -597,7 +668,7 @@ def render_omnidimension(
         marker_frame = usage_markers[usage_markers["provider"] == "omnidimension"]
         st.dataframe(_display_frame(marker_frame), use_container_width=True, hide_index=True)
 
-    render_dataframe_section("Agents", records.get("agents"))
+    render_dataframe_section("Agents", _compact_agent_frame(agents))
     render_dataframe_section("Phone numbers", records.get("phone_numbers"))
     render_dataframe_section("Call logs", calls)
 
@@ -691,7 +762,6 @@ def render_gemini(settings: Any, snapshot: dict[str, Any]) -> None:
             settings.google_application_credentials or settings.google_application_credentials_json,
             settings.google_billing_export_project_id,
             settings.google_billing_export_dataset,
-            settings.google_billing_export_table,
         ]
     )
     summary = snapshot.get("summary") or {}
@@ -700,7 +770,10 @@ def render_gemini(settings: Any, snapshot: dict[str, Any]) -> None:
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Billing export", "Ready" if google_ready else "Blocked")
-    col2.metric("Project ID", settings.google_cloud_project_id or "N/A")
+    col2.metric(
+        "Project ID",
+        settings.google_cloud_project_id or settings.google_billing_export_project_id or "N/A",
+    )
     col3.metric(
         "Current month cost",
         _currency(summary.get("current_month_cost"), summary.get("currency")),
@@ -747,6 +820,7 @@ def render_gemini(settings: Any, snapshot: dict[str, Any]) -> None:
     if not billing_rows.empty:
         daily = _gemini_daily_cost(billing_rows)
         by_sku = _gemini_cost_by_sku(billing_rows)
+        by_sku_usage = _gemini_usage_by_sku(billing_rows)
 
         left, right = st.columns(2)
         with left:
@@ -773,6 +847,29 @@ def render_gemini(settings: Any, snapshot: dict[str, Any]) -> None:
                     "net_cost": f"Net cost ({summary.get('currency')})",
                     "sku_description": "SKU",
                 },
+                text="net_cost",
+            )
+            _style_bar(fig, texttemplate="%{x:,.2f}")
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+
+        st.subheader("SKU-level usage and cost")
+        st.dataframe(
+            _display_frame(by_sku_usage.sort_values("net_cost", ascending=False)),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        service_cost = _group_sum(billing_rows, "service_description", "net_cost")
+        if not service_cost.empty:
+            st.subheader("Cost by Google service")
+            fig = px.bar(
+                service_cost,
+                x="net_cost",
+                y="service_description",
+                orientation="h",
+                color="service_description",
+                color_discrete_sequence=COLOR_SEQUENCE,
+                labels={"net_cost": f"Net cost ({summary.get('currency')})"},
                 text="net_cost",
             )
             _style_bar(fig, texttemplate="%{x:,.2f}")
@@ -845,11 +942,14 @@ def render_higgsfield(snapshot: dict[str, Any]) -> None:
     left, right = st.columns(2)
     with left:
         st.subheader("Usage limit utilization")
-        fig = _quota_gauge(
-            used=summary.get("usage_this_month"),
-            limit=summary.get("monthly_usage_limit"),
-        )
-        st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+        if _to_float(summary.get("monthly_usage_limit")) <= 0:
+            st.info("No Higgsfield usage limit returned by the API yet.")
+        else:
+            fig = _quota_gauge(
+                used=summary.get("usage_this_month"),
+                limit=summary.get("monthly_usage_limit"),
+            )
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
     with right:
         st.subheader("Cost markers")
         cost_frame = pd.DataFrame(
@@ -1021,6 +1121,22 @@ def _daily_count(frame: pd.DataFrame, date_column: str, value_name: str) -> pd.D
     return daily.groupby("date").size().reset_index(name=value_name).sort_values("date")
 
 
+def _daily_sum(
+    frame: pd.DataFrame,
+    date_column: str,
+    value_col: str,
+    value_name: str,
+) -> pd.DataFrame:
+    if frame.empty or date_column not in frame or value_col not in frame:
+        return pd.DataFrame(columns=["date", value_name])
+    daily = frame.dropna(subset=[date_column]).copy()
+    if daily.empty:
+        return pd.DataFrame(columns=["date", value_name])
+    daily["date"] = pd.to_datetime(daily[date_column]).dt.date
+    daily[value_name] = pd.to_numeric(daily[value_col], errors="coerce").fillna(0)
+    return daily.groupby("date")[value_name].sum().reset_index().sort_values("date")
+
+
 def _group_sum(frame: pd.DataFrame, group_col: str, value_col: str) -> pd.DataFrame:
     grouped = frame.dropna(subset=[value_col]).copy()
     grouped[value_col] = grouped[value_col].map(_decimal_to_float)
@@ -1080,6 +1196,26 @@ def _gemini_cost_by_sku(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _gemini_usage_by_sku(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(columns=["sku_description", "usage_unit", "usage_amount", "net_cost"])
+    by_sku = frame.copy()
+    if "usage_amount" not in by_sku:
+        by_sku["usage_amount"] = 0
+    if "net_cost" not in by_sku:
+        by_sku["net_cost"] = 0
+    by_sku["usage_amount"] = pd.to_numeric(by_sku["usage_amount"], errors="coerce").fillna(0)
+    by_sku["net_cost"] = pd.to_numeric(by_sku["net_cost"], errors="coerce").fillna(0)
+    group_cols = ["sku_description"]
+    if "usage_unit" in by_sku:
+        group_cols.append("usage_unit")
+    return (
+        by_sku.groupby(group_cols, dropna=False)
+        .agg(usage_amount=("usage_amount", "sum"), net_cost=("net_cost", "sum"))
+        .reset_index()
+    )
+
+
 def _calendar_density(renewals: pd.DataFrame) -> pd.DataFrame:
     frame = renewals.dropna(subset=["renewal_date"]).copy()
     if frame.empty:
@@ -1102,14 +1238,19 @@ def _quota_gauge(used: Any, limit: Any) -> go.Figure:
     limit_value = _to_float(limit)
     if limit_value <= 0:
         limit_value = max(used_value, 1)
+    usage_ratio = used_value / limit_value if limit_value else 0
+    bar_color = "#059669"
+    if usage_ratio >= 0.9:
+        bar_color = "#dc2626"
+    elif usage_ratio >= 0.7:
+        bar_color = "#f59e0b"
     fig = go.Figure(
         go.Indicator(
-            mode="gauge+number+delta",
+            mode="gauge+number",
             value=used_value,
-            delta={"reference": limit_value, "relative": False},
             gauge={
                 "axis": {"range": [0, limit_value]},
-                "bar": {"color": "#2563eb"},
+                "bar": {"color": bar_color},
                 "steps": [
                     {"range": [0, limit_value * 0.7], "color": "#dcfce7"},
                     {"range": [limit_value * 0.7, limit_value * 0.9], "color": "#fef3c7"},
@@ -1128,6 +1269,35 @@ def _markers_dict(markers: pd.DataFrame, provider: str) -> dict[str, Any]:
         return {}
     provider_markers = markers[markers["provider"] == provider]
     return dict(zip(provider_markers["metric_name"], provider_markers["value"], strict=False))
+
+
+def _compact_agent_frame(agents: pd.DataFrame) -> pd.DataFrame:
+    if agents is None or agents.empty:
+        return pd.DataFrame()
+
+    preferred_columns = [
+        "id",
+        "uuid",
+        "name",
+        "bot_name",
+        "status",
+        "language",
+        "voice_id",
+        "phone_number",
+        "created_at",
+        "updated_at",
+    ]
+    selected = [column for column in preferred_columns if column in agents.columns]
+    if selected:
+        return agents[selected].copy()
+
+    compact = agents.copy()
+    nested_columns = [
+        column
+        for column in compact.columns
+        if compact[column].map(lambda value: isinstance(value, dict | list | tuple | set)).any()
+    ]
+    return compact.drop(columns=nested_columns, errors="ignore")
 
 
 def _first_existing_column(frame: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -1164,6 +1334,36 @@ def _urgency_bucket(days: Any) -> str:
 
 def _live_source_count(*snapshots: dict[str, Any]) -> int:
     return sum(1 for snapshot in snapshots if snapshot.get("status") in {"pass", "partial"})
+
+
+def _live_api_spend_frame(
+    gemini_snapshot: dict[str, Any],
+    higgsfield_snapshot_data: dict[str, Any],
+    fx_rates: pd.DataFrame,
+) -> pd.DataFrame:
+    fx_map = {
+        row["currency_code"]: _to_float(row["fx_rate"])
+        for _, row in fx_rates.iterrows()
+        if row.get("currency_code") and row.get("fx_rate") is not None
+    }
+    rows: list[dict[str, Any]] = []
+    for provider, summary, amount_key in [
+        ("Gemini", gemini_snapshot.get("summary") or {}, "current_month_cost"),
+        ("Higgsfield", higgsfield_snapshot_data.get("summary") or {}, "monthly_cost"),
+    ]:
+        amount = _to_float(summary.get(amount_key))
+        currency = summary.get("currency") or summary.get("currency_code") or "INR"
+        if amount <= 0:
+            continue
+        rows.append(
+            {
+                "provider": provider,
+                "amount": amount,
+                "currency_code": currency,
+                "monthly_inr": amount * fx_map.get(currency, 1.0),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _next_renewal_label(frame: pd.DataFrame) -> str:
