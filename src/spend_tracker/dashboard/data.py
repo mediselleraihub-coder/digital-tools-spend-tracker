@@ -550,14 +550,13 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
             "/workspaces/credit-ledger/statistics",
             {"start_date": month_start, "end_date": today},
         ),
-        "usage": ("/workspaces/usage", None),
         "subscription": ("/workspaces/subscription", None),
         "subscription_features": ("/workspaces/subscription-features", {"version": "v2"}),
-        "history": ("/workspaces/history", {"size": "10", "page": "1", "is_active": "true"}),
         "credit_ledger": (
             "/workspaces/credit-ledger",
             {"limit": "25", "page": "1", "start_date": month_start, "end_date": today},
         ),
+        "invoices": ("/workspaces/invoices", {"limit": "25"}),
         "pending_invoices": ("/workspaces/pending-invoices", {"limit": "25"}),
         "payment_cards": ("/workspaces/payment-cards", {"limit": "25"}),
         "details": ("/workspaces/details", None),
@@ -593,7 +592,7 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
 
         summary = _higgsfield_summary_from_payloads(payloads, settings)
         records["endpoint_statuses"] = pd.DataFrame(endpoint_statuses)
-        status = "pass" if payloads.get("statistics") or payloads.get("usage") else "partial"
+        status = "pass" if payloads.get("statistics") else "partial"
         errors = [
             f"{item['endpoint']}: HTTP {item['status_code']}"
             for item in endpoint_statuses
