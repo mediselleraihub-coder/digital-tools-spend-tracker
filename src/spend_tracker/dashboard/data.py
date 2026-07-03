@@ -530,8 +530,15 @@ def higgsfield_snapshot(settings: Settings) -> ApiSnapshot:
     )
 
 
+def _higgsfield_api_base_url(settings: Settings) -> str:
+    base_url = str(settings.higgsfield_api_base or "https://fnf.higgsfield.ai").rstrip("/")
+    if base_url in {"https://dash.higgsfield.ai", "https://higgsfield.ai"}:
+        return "https://fnf.higgsfield.ai"
+    return base_url
+
+
 def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
-    base_url = str(settings.higgsfield_api_base).rstrip("/")
+    base_url = _higgsfield_api_base_url(settings)
     month_start = pd.Timestamp.today().replace(day=1).date().isoformat()
     today = date.today().isoformat()
     headers = {
@@ -540,20 +547,21 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
     }
     endpoints = {
         "statistics": (
-            "/api/v1/statistics",
+            "/workspaces/credit-ledger/statistics",
             {"start_date": month_start, "end_date": today},
         ),
-        "usage": ("/api/v1/usage", None),
-        "subscription": ("/api/v1/subscription", None),
-        "subscription_features": ("/api/v1/subscription-features", {"version": "v2"}),
-        "history": ("/api/v1/history", {"size": "10", "page": "1", "is_active": "true"}),
+        "usage": ("/workspaces/usage", None),
+        "subscription": ("/workspaces/subscription", None),
+        "subscription_features": ("/workspaces/subscription-features", {"version": "v2"}),
+        "history": ("/workspaces/history", {"size": "10", "page": "1", "is_active": "true"}),
         "credit_ledger": (
-            "/api/v1/credit-ledger",
+            "/workspaces/credit-ledger",
             {"limit": "25", "page": "1", "start_date": month_start, "end_date": today},
         ),
-        "pending_invoices": ("/api/v1/pending-invoices", {"limit": "25"}),
-        "payment_cards": ("/api/v1/payment-cards", {"limit": "25"}),
-        "details": ("/api/v1/details", None),
+        "pending_invoices": ("/workspaces/pending-invoices", {"limit": "25"}),
+        "payment_cards": ("/workspaces/payment-cards", {"limit": "25"}),
+        "details": ("/workspaces/details", None),
+        "job_costs": ("/job-sets/costs", None),
     }
     records: dict[str, pd.DataFrame] = {}
     payloads: dict[str, Any] = {}

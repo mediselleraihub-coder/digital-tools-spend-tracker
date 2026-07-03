@@ -140,7 +140,7 @@ class Settings(BaseSettings):
         default=None, alias="HIGGSFIELD_BILLING_DASHBOARD_URL"
     )
     higgsfield_api_base: AnyUrl | None = Field(
-        default="https://dash.higgsfield.ai",
+        default="https://fnf.higgsfield.ai",
         alias="HIGGSFIELD_API_BASE",
     )
     higgsfield_bearer_token: SecretStr | None = Field(
