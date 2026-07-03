@@ -155,6 +155,22 @@ class Settings(BaseSettings):
         default=None,
         alias="HIGGSFIELD_EXTRA_HEADERS_JSON",
     )
+    higgsfield_clerk_token_url: SecretStr | None = Field(
+        default=None,
+        alias="HIGGSFIELD_CLERK_TOKEN_URL",
+    )
+    higgsfield_clerk_cookie: SecretStr | None = Field(
+        default=None,
+        alias="HIGGSFIELD_CLERK_COOKIE",
+    )
+    higgsfield_clerk_form_token: SecretStr | None = Field(
+        default=None,
+        alias="HIGGSFIELD_CLERK_FORM_TOKEN",
+    )
+    higgsfield_clerk_organization_id: str | None = Field(
+        default=None,
+        alias="HIGGSFIELD_CLERK_ORGANIZATION_ID",
+    )
 
     @field_validator("*", mode="before")
     @classmethod

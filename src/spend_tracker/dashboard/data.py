@@ -527,6 +527,7 @@ def higgsfield_snapshot(settings: Settings) -> ApiSnapshot:
         and (
             getattr(settings, "higgsfield_bearer_token", None)
             or getattr(settings, "higgsfield_cookie", None)
+            or _higgsfield_clerk_refresh_configured(settings)
         )
     ):
         return _fetch_higgsfield_api_snapshot(settings)
@@ -548,7 +549,6 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
     base_url = _higgsfield_api_base_url(settings)
     month_start = pd.Timestamp.today().replace(day=1).date().isoformat()
     today = date.today().isoformat()
-    headers = _higgsfield_request_headers(settings)
     endpoints = {
         "statistics": (
             "/workspaces/credit-ledger/statistics",
@@ -571,6 +571,8 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
     endpoint_statuses: list[dict[str, Any]] = []
 
     try:
+        refreshed_token = _higgsfield_refresh_clerk_token(settings)
+        headers = _higgsfield_request_headers(settings, refreshed_token=refreshed_token)
         request_headers = {
             **headers,
             "Origin": "https://higgsfield.ai",
@@ -637,7 +639,10 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
         )
 
 
-def _higgsfield_request_headers(settings: Settings) -> dict[str, str]:
+def _higgsfield_request_headers(
+    settings: Settings,
+    refreshed_token: str | None = None,
+) -> dict[str, str]:
     headers = {
         "Accept": "application/json",
         "Origin": "https://higgsfield.ai",
@@ -646,16 +651,60 @@ def _higgsfield_request_headers(settings: Settings) -> dict[str, str]:
     bearer_token = getattr(settings, "higgsfield_bearer_token", None)
     cookie = getattr(settings, "higgsfield_cookie", None)
 
-    if bearer_token:
+    if refreshed_token:
+        headers["Authorization"] = _bearer_header_value(refreshed_token)
+    elif bearer_token:
         token = bearer_token.get_secret_value().strip()
-        if token.lower().startswith("bearer "):
-            headers["Authorization"] = token
-        else:
-            headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = _bearer_header_value(token)
     if cookie:
         headers["Cookie"] = cookie.get_secret_value().strip()
     headers.update(_higgsfield_extra_headers(settings))
     return headers
+
+
+def _higgsfield_clerk_refresh_configured(settings: Settings) -> bool:
+    return bool(
+        getattr(settings, "higgsfield_clerk_token_url", None)
+        and getattr(settings, "higgsfield_clerk_cookie", None)
+        and getattr(settings, "higgsfield_clerk_form_token", None)
+    )
+
+
+def _higgsfield_refresh_clerk_token(settings: Settings) -> str | None:
+    if not _higgsfield_clerk_refresh_configured(settings):
+        return None
+
+    token_url = getattr(settings, "higgsfield_clerk_token_url").get_secret_value().strip()
+    clerk_cookie = getattr(settings, "higgsfield_clerk_cookie").get_secret_value().strip()
+    form_token = getattr(settings, "higgsfield_clerk_form_token").get_secret_value().strip()
+    organization_id = getattr(settings, "higgsfield_clerk_organization_id", None) or ""
+
+    response = httpx.post(
+        token_url,
+        data={"organization_id": organization_id, "token": form_token},
+        headers={
+            "Accept": "*/*",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cookie": clerk_cookie,
+            "Origin": "https://higgsfield.ai",
+            "Referer": "https://higgsfield.ai/",
+        },
+        timeout=20,
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    jwt = payload.get("jwt")
+    if not isinstance(jwt, str) or not jwt:
+        raise ValueError("Higgsfield Clerk token refresh did not return jwt")
+    return jwt
+
+
+def _bearer_header_value(token: str) -> str:
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        return token
+    return f"Bearer {token}"
 
 
 def _higgsfield_extra_headers(settings: Settings) -> dict[str, str]:

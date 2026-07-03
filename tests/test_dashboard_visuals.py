@@ -12,6 +12,8 @@ from spend_tracker.dashboard.app import (
     _renewal_month_exposure,
 )
 from spend_tracker.dashboard.data import (
+    _bearer_header_value,
+    _higgsfield_clerk_refresh_configured,
     _higgsfield_request_headers,
     _higgsfield_summary_from_payloads,
     combined_commitments_dataframe,
@@ -135,6 +137,35 @@ def test_higgsfield_request_headers_support_cookie_and_extra_headers() -> None:
     assert headers["Cookie"] == "__session=session-token"
     assert headers["x-client"] == "web"
     assert "host" not in {key.lower() for key in headers}
+
+
+def test_higgsfield_request_headers_prefer_refreshed_token() -> None:
+    headers = _higgsfield_request_headers(
+        make_settings(HIGGSFIELD_BEARER_TOKEN="expired-token"),
+        refreshed_token="fresh-token",
+    )
+
+    assert headers["Authorization"] == "Bearer fresh-token"
+
+
+def test_higgsfield_clerk_refresh_requires_all_secret_inputs() -> None:
+    partial = make_settings(
+        HIGGSFIELD_CLERK_TOKEN_URL="https://clerk.higgsfield.ai/v1/client/sessions/x/tokens",
+        HIGGSFIELD_CLERK_COOKIE="__client=value",
+    )
+    complete = make_settings(
+        HIGGSFIELD_CLERK_TOKEN_URL="https://clerk.higgsfield.ai/v1/client/sessions/x/tokens",
+        HIGGSFIELD_CLERK_COOKIE="__client=value",
+        HIGGSFIELD_CLERK_FORM_TOKEN="client-token",
+    )
+
+    assert not _higgsfield_clerk_refresh_configured(partial)
+    assert _higgsfield_clerk_refresh_configured(complete)
+
+
+def test_bearer_header_value_preserves_existing_prefix() -> None:
+    assert _bearer_header_value("Bearer token") == "Bearer token"
+    assert _bearer_header_value("token") == "Bearer token"
 
 
 def test_higgsfield_request_headers_tolerate_older_settings_shape() -> None:
