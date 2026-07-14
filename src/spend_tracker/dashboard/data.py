@@ -554,6 +554,7 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
             "/workspaces/credit-ledger/statistics",
             {"start_date": month_start, "end_date": today},
         ),
+        "wallet": ("/workspaces/wallet", None),
         "subscription": ("/workspaces/subscription", None),
         "subscription_features": ("/workspaces/subscription-features", {"version": "v2"}),
         "credit_ledger": (
@@ -562,7 +563,7 @@ def _fetch_higgsfield_api_snapshot(settings: Settings) -> ApiSnapshot:
         ),
         "invoices": ("/workspaces/invoices", {"limit": "25"}),
         "pending_invoices": ("/workspaces/pending-invoices", {"limit": "25"}),
-        "payment_cards": ("/workspaces/payment-cards", {"limit": "25"}),
+        # "payment_cards": ("/workspaces/payment-cards", {"limit": "25"}),
         "details": ("/workspaces/details", None),
         "job_costs": ("/job-sets/costs", None),
     }
@@ -852,8 +853,16 @@ def _higgsfield_summary_from_payloads(
             "unit_amount",
         ],
     )
+    if payloads.get("wallet"):
+        current_balance = _higgsfield_credits(current_balance)
+
+    if _first_mapping_value(usage_flat, ["total_credits_spent"]) is not None:
+        usage_this_month = _higgsfield_credits(usage_this_month)
+    
     if _missing_value(current_balance):
         current_balance = _subtract_values(monthly_usage_limit, usage_this_month)
+
+
     return {
         "plan_name": _first_mapping_value(
             merged,
@@ -901,6 +910,13 @@ def _subtract_values(left: Any, right: Any) -> Any:
     except (InvalidOperation, TypeError, ValueError):
         return None
 
+def _higgsfield_credits(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value)) / Decimal("100")
+    except (InvalidOperation, TypeError, ValueError):
+        return None
 
 def _flatten_mapping(value: Any, prefix: str = "") -> dict[str, Any]:
     if isinstance(value, dict):
